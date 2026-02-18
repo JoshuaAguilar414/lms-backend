@@ -13,7 +13,7 @@ const router = express.Router();
 router.get('/', authenticate, async (req, res, next) => {
   try {
     const enrollments = await Enrollment.find({ userId: req.user.userId })
-      .populate('courseId', 'title thumbnail scormUrl admissionId')
+      .populate('courseId', 'title thumbnail handle scormUrl admissionId totalLessons')
       .populate('userId', 'name email')
       .sort({ enrolledAt: -1 });
 

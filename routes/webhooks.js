@@ -140,11 +140,13 @@ router.post('/shopify/product-created', verifyShopifyWebhook, async (req, res, n
 
     const course = await Course.findOne({ shopifyProductId: String(product.id) });
 
+    const handle = product.handle || undefined;
     if (course) {
       // Update existing course
       course.title = product.title;
       course.description = product.body_html;
       course.thumbnail = product.images?.[0]?.src;
+      course.handle = handle;
       course.shopifyData = product;
       course.lastSyncedAt = new Date();
       await course.save();
@@ -156,6 +158,7 @@ router.post('/shopify/product-created', verifyShopifyWebhook, async (req, res, n
         title: product.title,
         description: product.body_html,
         thumbnail: product.images?.[0]?.src,
+        handle,
         shopifyData: product,
       });
       console.log('✅ Created course:', product.title);
@@ -182,6 +185,7 @@ router.post('/shopify/product-updated', verifyShopifyWebhook, async (req, res, n
       course.title = product.title;
       course.description = product.body_html;
       course.thumbnail = product.images?.[0]?.src;
+      course.handle = product.handle || course.handle;
       course.shopifyData = product;
       course.lastSyncedAt = new Date();
       await course.save();
