@@ -1,8 +1,32 @@
 import express from 'express';
 import Course from '../models/Course.js';
 import { authenticate } from '../middleware/auth.js';
+import {
+  verifyLinkSignature,
+  findOrCreateUserAndIssueLmsToken,
+  redirectToFrontendWithToken,
+} from './auth.js';
 
 const router = express.Router();
+
+/**
+ * GET /api/courses/user/:customerId/:email
+ * Legacy "My Courses" redirect URL: training.vectra-intl.com/lms-backend/api/courses/user/{customerId}/{email}
+ * Verifies optional ?signature= (required if SHOPIFY_LINK_SECRET set), then redirects to frontend with LMS token.
+ */
+router.get('/user/:customerId/:email', async (req, res, next) => {
+  try {
+    const { customerId, email } = req.params;
+    const signature = req.query.signature;
+    if (!verifyLinkSignature(customerId, decodeURIComponent(email), signature)) {
+      return res.status(401).json({ error: 'Invalid or missing link signature' });
+    }
+    const { lmsToken } = await findOrCreateUserAndIssueLmsToken(customerId, decodeURIComponent(email));
+    redirectToFrontendWithToken(res, lmsToken);
+  } catch (error) {
+    next(error);
+  }
+});
 
 /**
  * GET /api/courses
