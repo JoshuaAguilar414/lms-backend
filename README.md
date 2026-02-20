@@ -29,6 +29,7 @@ Express + MongoDB backend for the VECTRA LMS system.
 ## API Endpoints
 
 ### Authentication
+- `GET /api/auth/shopify-redirect?token=<shopify-session-jwt>` - My Courses redirect from Shopify: verifies token, then redirects to frontend `/auth/callback?token=...` (see `SHOPIFY_SETUP.md`)
 - `POST /api/auth/shopify-verify` - Verify Shopify session token; returns LMS JWT and user (body: `{ token: "<shopify-session-jwt>" }` or `Authorization: Bearer <token>`)
 - `POST /api/auth/sync-user` - Sync user profile from Shopify token (body or Bearer)
 

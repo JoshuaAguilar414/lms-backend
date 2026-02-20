@@ -73,6 +73,49 @@ function parseShopifyCustomerId(sub) {
 }
 
 /**
+ * GET /api/auth/shopify-redirect
+ * My Courses redirect from Shopify: verify Shopify session token, then redirect to LMS frontend.
+ * Use this as the "My Courses" link target on Shopify (with token appended by your theme/app).
+ * Backend verifies the token with Shopify (JWT signed by SHOPIFY_API_SECRET); frontend will
+ * verify again via POST /api/auth/shopify-verify when loading /auth/callback.
+ * Query: token (required) – Shopify Customer Account session JWT.
+ */
+router.get('/shopify-redirect', async (req, res, next) => {
+  try {
+    const token = req.query.token;
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({
+        error: 'Missing token',
+        usage: 'GET /api/auth/shopify-redirect?token=<shopify-session-jwt>',
+      });
+    }
+
+    const secret = process.env.SHOPIFY_API_SECRET;
+    if (!secret) {
+      return res.status(500).json({ error: 'Shopify API secret not configured' });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(token, secret, { algorithms: ['HS256'] });
+    } catch (err) {
+      return res.status(401).json({ error: 'Invalid or expired Shopify token' });
+    }
+
+    const customerId = parseShopifyCustomerId(payload.sub);
+    if (!customerId) {
+      return res.status(401).json({ error: 'Token missing customer id (sub)' });
+    }
+
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+    const callbackUrl = `${frontendUrl}/auth/callback?token=${encodeURIComponent(token)}`;
+    res.redirect(302, callbackUrl);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /api/auth/shopify-verify
  * Verify Shopify session token and return LMS JWT.
  * Body: { token: "<shopify-session-jwt>" } or send token in Authorization: Bearer <token>

@@ -10,7 +10,12 @@
     "test": "echo \"No tests yet\" && exit 0",
     "test:shopify": "node scripts/test-shopify-connection.js"
   },
-  "keywords": ["lms", "express", "mongodb", "shopify"],
+  "keywords": [
+    "lms",
+    "express",
+    "mongodb",
+    "shopify"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
