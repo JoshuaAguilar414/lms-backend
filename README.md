@@ -34,6 +34,7 @@ Express + MongoDB backend for the VECTRA LMS system.
 - `POST /api/auth/sync-user` - Sync user profile from Shopify token (body or Bearer)
 
 ### Courses
+- `GET /api/courses/user/:customerId/:email` - My Courses redirect from Shopify: finds/creates user, issues LMS token, redirects to frontend `{FRONTEND_URL}/auth/login?jwtToken=...` (frontend and backend can be different domains)
 - `GET /api/courses` - List all active courses
 - `GET /api/courses/:id` - Get course by ID
 - `GET /api/courses/shopify/:productId` - Get course by Shopify product ID
