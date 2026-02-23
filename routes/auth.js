@@ -51,12 +51,12 @@ async function findOrCreateUserAndIssueLmsToken(customerId, email) {
 }
 
 /**
- * Redirect to frontend auth callback with lmsToken.
+ * Redirect to frontend auth login with jwtToken (pattern: training.vectra-intl.com/auth/login?jwtToken=...).
  */
 function redirectToFrontendWithToken(res, lmsToken) {
   const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
-  const callbackUrl = `${frontendUrl}/auth/callback?lmsToken=${encodeURIComponent(lmsToken)}`;
-  res.redirect(302, callbackUrl);
+  const loginUrl = `${frontendUrl}/auth/login?jwtToken=${encodeURIComponent(lmsToken)}`;
+  res.redirect(302, loginUrl);
 }
 
 /**
@@ -188,9 +188,78 @@ router.post('/shopify-verify', async (req, res, next) => {
 });
 
 /**
+ * POST /api/auth/external-login
+ * Login via external JWT (e.g. ApnaSite / training.vectra-intl.com auth/login?jwtToken=...).
+ * Body: { jwtToken: "<external-jwt>" }. Verifies with EXTERNAL_JWT_SECRET, finds/creates user by id/email, returns LMS token.
+ */
+router.post('/external-login', async (req, res, next) => {
+  try {
+    const jwtToken = req.body?.jwtToken ?? req.query?.jwtToken;
+    if (!jwtToken || typeof jwtToken !== 'string') {
+      return res.status(400).json({
+        error: 'Missing jwtToken',
+        usage: 'POST /api/auth/external-login with body { jwtToken: "..." } or GET ?jwtToken=...',
+      });
+    }
+
+    const secret = process.env.EXTERNAL_JWT_SECRET;
+    if (!secret) {
+      return res.status(500).json({ error: 'EXTERNAL_JWT_SECRET not configured' });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(jwtToken, secret, { algorithms: ['HS256'] });
+    } catch (err) {
+      return res.status(401).json({ error: 'Invalid or expired external token' });
+    }
+
+    const externalId = String(payload.id ?? payload.sub ?? '').trim();
+    const email = String(payload.email ?? '').trim().toLowerCase() || `external-${externalId}@lms.local`;
+    const name = String(payload.name ?? '').trim() || `User ${externalId}`;
+
+    const syntheticCustomerId = `external-${externalId}`;
+    let user = await User.findOne({ shopifyCustomerId: syntheticCustomerId });
+    if (!user) {
+      user = await User.findOne({ email });
+      if (!user) {
+        user = await User.create({
+          shopifyCustomerId: syntheticCustomerId,
+          email,
+          name,
+          shopifyData: { source: 'external-login', payload: { id: payload.id, companyId: payload.companyId } },
+        });
+      }
+    }
+
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      return res.status(500).json({ error: 'JWT secret not configured' });
+    }
+
+    const lmsToken = jwt.sign(
+      { userId: user._id.toString(), shopifyCustomerId: user.shopifyCustomerId },
+      jwtSecret,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
+
+    res.json({
+      token: lmsToken,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /api/auth/shopify-customer-login
  * Legacy/Liquid-friendly login: customerId + email (optional signature).
- * Redirects to frontend /auth/callback?lmsToken=... for the same flow as token-based login.
+ * Redirects to frontend /auth/login?jwtToken=... for the same flow as token-based login.
  * Query: customerId, email, signature (optional; required if SHOPIFY_LINK_SECRET or SHOPIFY_WEBHOOK_SECRET is set).
  */
 router.get('/shopify-customer-login', async (req, res, next) => {

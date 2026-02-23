@@ -11,17 +11,20 @@ const router = express.Router();
 
 /**
  * GET /api/courses/user/:customerId/:email
- * Legacy "My Courses" redirect URL: training.vectra-intl.com/lms-backend/api/courses/user/{customerId}/{email}
- * Verifies optional ?signature= (required if SHOPIFY_LINK_SECRET set), then redirects to frontend with LMS token.
+ * My Courses redirect from Shopify. Link uses backend domain: {BACKEND_URL}/api/courses/user/{customerId}/{email}.
+ * Verifies optional ?signature= (required if SHOPIFY_LINK_SECRET set), finds/creates user, issues LMS token,
+ * then redirects to FRONTEND_URL/auth/login?jwtToken=<lmsToken> (frontend can be a different domain).
  */
 router.get('/user/:customerId/:email', async (req, res, next) => {
   try {
     const { customerId, email } = req.params;
     const signature = req.query.signature;
-    if (!verifyLinkSignature(customerId, decodeURIComponent(email), signature)) {
-      return res.status(401).json({ error: 'Invalid or missing link signature' });
+    const decodedEmail = decodeURIComponent(email);
+    if (!verifyLinkSignature(customerId, decodedEmail, signature)) {
+      const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+      return res.redirect(302, `${frontendUrl}/auth/login?error=invalid_signature`);
     }
-    const { lmsToken } = await findOrCreateUserAndIssueLmsToken(customerId, decodeURIComponent(email));
+    const { lmsToken } = await findOrCreateUserAndIssueLmsToken(customerId, decodedEmail);
     redirectToFrontendWithToken(res, lmsToken);
   } catch (error) {
     next(error);
