@@ -6,17 +6,18 @@ import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
-/** Secret for signing customer login links (Liquid-friendly flow). Use SHOPIFY_LINK_SECRET or SHOPIFY_WEBHOOK_SECRET. */
+/** Secret for signing customer login links. Only SHOPIFY_LINK_SECRET is used (not webhook secret). */
 function getLinkSecret() {
-  return process.env.SHOPIFY_LINK_SECRET || process.env.SHOPIFY_WEBHOOK_SECRET;
+  const s = process.env.SHOPIFY_LINK_SECRET;
+  return typeof s === 'string' && s.trim() !== '' ? s : null;
 }
 
 /**
- * Verify HMAC signature for customerId|email. If no secret is configured, returns true (insecure, backward compat).
+ * Verify HMAC signature for customerId|email. Signature is required only when SHOPIFY_LINK_SECRET is set.
  */
 function verifyLinkSignature(customerId, email, signature) {
   const secret = getLinkSecret();
-  if (!secret) return true;
+  if (!secret) return true; // no link secret configured → accept without signature
   if (!signature || typeof signature !== 'string') return false;
   const payload = `${String(customerId)}|${String(email).trim().toLowerCase()}`;
   const expected = crypto.createHmac('sha256', secret).update(payload).digest('hex');
@@ -260,7 +261,7 @@ router.post('/external-login', async (req, res, next) => {
  * GET /api/auth/shopify-customer-login
  * Legacy/Liquid-friendly login: customerId + email (optional signature).
  * Redirects to frontend /auth/login?jwtToken=... for the same flow as token-based login.
- * Query: customerId, email, signature (optional; required if SHOPIFY_LINK_SECRET or SHOPIFY_WEBHOOK_SECRET is set).
+ * Query: customerId, email, signature (optional; required only if SHOPIFY_LINK_SECRET is set).
  */
 router.get('/shopify-customer-login', async (req, res, next) => {
   try {
@@ -276,7 +277,10 @@ router.get('/shopify-customer-login', async (req, res, next) => {
     }
 
     if (!verifyLinkSignature(customerId, email, signature)) {
-      return res.status(401).json({ error: 'Invalid or missing link signature' });
+      return res.status(401).json({
+        error: 'Invalid or missing link signature',
+        hint: 'Link signing is required when SHOPIFY_LINK_SECRET is set in .env. Leave it unset for Liquid "My Courses" links without signature, and ensure the latest backend is deployed.',
+      });
     }
 
     const { lmsToken } = await findOrCreateUserAndIssueLmsToken(customerId, email);
