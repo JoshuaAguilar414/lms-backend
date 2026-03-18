@@ -43,7 +43,13 @@ export const verifyShopifyWebhook = (req, res, next) => {
   const body = req.rawBody && Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body), 'utf8');
   const hash = crypto.createHmac('sha256', secret).update(body).digest('base64');
 
-  if (crypto.timingSafeEqual(Buffer.from(hmac, 'base64'), Buffer.from(hash, 'base64')) === false) {
+  // timingSafeEqual throws if buffer lengths differ, so guard to return 401 instead of 500.
+  const theirMac = Buffer.from(String(hmac), 'base64');
+  const expectedMac = Buffer.from(String(hash), 'base64');
+  if (theirMac.length !== expectedMac.length) {
+    return res.status(401).json({ error: 'Invalid webhook signature' });
+  }
+  if (!crypto.timingSafeEqual(theirMac, expectedMac)) {
     return res.status(401).json({ error: 'Invalid webhook signature' });
   }
 
