@@ -7,7 +7,10 @@ import { authenticate } from '../middleware/auth.js';
 const router = express.Router();
 
 function getShopifyAdminConfig() {
-  const shopifyShopDomain = process.env.SHOPIFY_SHOP_DOMAIN; // e.g. marketplace.vectra-intl.com
+  // Support multiple env var names used across setups.
+  // Prefer SHOPIFY_SHOP_DOMAIN, fallback to SHOPIFY_SHOP (common myshopify.com domain).
+  const shopifyShopDomain =
+    process.env.SHOPIFY_SHOP_DOMAIN ?? process.env.SHOPIFY_SHOP; // e.g. marketplace.vectra-intl.com or xxxx.myshopify.com
   const shopifyAdminAccessToken =
     process.env.SHOPIFY_ADMIN_ACCESS_TOKEN ?? process.env.SHOPIFY_ADMIN_API_TOKEN;
   const shopifyAdminApiVersion = process.env.SHOPIFY_ADMIN_API_VERSION || '2025-01';
