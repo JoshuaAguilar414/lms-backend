@@ -5,6 +5,7 @@ import Course from '../models/Course.js';
 import User from '../models/User.js';
 import Progress from '../models/Progress.js';
 import ShopifyOrder from '../models/ShopifyOrder.js';
+import { syncOrdersForShopifyCustomer } from '../services/shopifySync.js';
 
 const router = express.Router();
 
@@ -308,7 +309,27 @@ router.post('/shopify/customers-create', verifyShopifyWebhook, async (req, res, 
     const customer = req.body;
     console.log('👤 Customer created:', customer.email);
 
-    await syncCustomerToUser(customer, req.shopifyShop, req.shopifyShopId);
+    const user = await syncCustomerToUser(customer, req.shopifyShop, req.shopifyShopId);
+
+    // Also backfill/sync order-derived enrollments for this customer.
+    // This keeps SCORM dashboards ready even if order webhooks were delayed/missed.
+    if (user?._id && customer?.id != null) {
+      try {
+        await syncOrdersForShopifyCustomer({
+          userId: user._id.toString(),
+          shopifyCustomerId: String(customer.id),
+        });
+        console.log('[webhook customers-create] synced orders for customer', {
+          userId: user._id.toString(),
+          shopifyCustomerId: String(customer.id),
+        });
+      } catch (syncErr) {
+        console.warn(
+          '[webhook customers-create] order sync failed:',
+          syncErr?.message || syncErr
+        );
+      }
+    }
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('❌ Error syncing customer create:', error);
@@ -325,7 +346,26 @@ router.post('/shopify/customers-update', verifyShopifyWebhook, async (req, res, 
     const customer = req.body;
     console.log('👤 Customer updated:', customer.email);
 
-    await syncCustomerToUser(customer, req.shopifyShop, req.shopifyShopId);
+    const user = await syncCustomerToUser(customer, req.shopifyShop, req.shopifyShopId);
+
+    // Keep enrollments/order cache aligned whenever customer profile updates arrive.
+    if (user?._id && customer?.id != null) {
+      try {
+        await syncOrdersForShopifyCustomer({
+          userId: user._id.toString(),
+          shopifyCustomerId: String(customer.id),
+        });
+        console.log('[webhook customers-update] synced orders for customer', {
+          userId: user._id.toString(),
+          shopifyCustomerId: String(customer.id),
+        });
+      } catch (syncErr) {
+        console.warn(
+          '[webhook customers-update] order sync failed:',
+          syncErr?.message || syncErr
+        );
+      }
+    }
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('❌ Error syncing customer update:', error);

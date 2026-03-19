@@ -74,8 +74,6 @@ const CUSTOMER_ORDERS_QUERY = `
             id
             name
             createdAt
-            financialStatus
-            fulfillmentStatus
             lineItems(first: 50) {
               edges {
                 node {
@@ -143,7 +141,10 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
       query: CUSTOMER_ORDERS_QUERY,
       variables: { id: shopifyCustomerGid, cursor },
     });
-    console.log("respJson", respJson);
+    if (respJson?.errors?.length) {
+      console.warn('[shopify sync] graphql errors', respJson.errors);
+      break;
+    }
 
     const ordersConn = respJson?.data?.data?.customer?.orders;
     const edges = ordersConn?.edges ?? [];
@@ -166,8 +167,6 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
         {
           $set: {
             shopifyOrderNumber: shopifyOrderNumber || undefined,
-            financialStatus: order.financialStatus ?? undefined,
-            fulfillmentStatus: order.fulfillmentStatus ?? undefined,
             orderCreatedAt: order.createdAt ? new Date(order.createdAt) : undefined,
             rawOrderData: order,
           },

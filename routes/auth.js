@@ -576,9 +576,25 @@ router.get('/me', authenticate, async (req, res, next) => {
       userId: req.user?.userId,
       shopifyCustomerId: req.user?.shopifyCustomerId,
     });
-    const user = await User.findById(req.user.userId).lean();
+    let user = await User.findById(req.user.userId).lean();
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Sync Shopify customer profile into Mongo (when possible) before returning.
+    // This keeps `/api/auth/me` consistent even if webhooks were missed.
+    if (req.user?.shopifyCustomerId && user?.shopifyCustomerId) {
+      const syncMs = process.env.SHOPIFY_PROFILE_SYNC_ON_ME_MS
+        ? Number(process.env.SHOPIFY_PROFILE_SYNC_ON_ME_MS)
+        : 10 * 60 * 1000; // 10 minutes
+      const lastSynced = user.lastSyncedAt ? new Date(user.lastSyncedAt).getTime() : 0;
+      const shouldSync = !lastSynced || Date.now() - lastSynced > syncMs;
+      if (shouldSync) {
+        console.log('[auth me] syncing user profile from Shopify (sync-on-read)');
+        // Reuse existing helper: it fetches Shopify profile and upserts the Mongo user.
+        await findOrCreateUserAndIssueLmsToken(req.user.shopifyCustomerId, user.email);
+        user = await User.findById(req.user.userId).lean();
+      }
     }
 
     // Optional "sync-on-read" to ensure enrollments exist for SCORM dashboards.

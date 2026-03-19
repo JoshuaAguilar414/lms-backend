@@ -156,8 +156,6 @@ router.get('/orders/:customerId', requireDebugSecret, async (req, res, next) => 
                 id
                 name
                 createdAt
-                financialStatus
-                fulfillmentStatus
                 lineItems(first: 50) {
                   edges {
                     node {
@@ -260,8 +258,6 @@ router.get('/orders/:customerId', requireDebugSecret, async (req, res, next) => 
         id: o?.id ?? null,
         name: o?.name ?? null,
         createdAt: o?.createdAt ?? null,
-        financialStatus: o?.financialStatus ?? null,
-        fulfillmentStatus: o?.fulfillmentStatus ?? null,
         lineItems,
       };
     });
