@@ -9,6 +9,15 @@ import { syncOrdersForShopifyCustomer } from '../services/shopifySync.js';
 
 const router = express.Router();
 
+function normalizeShopifyOrderId(input) {
+  const raw = String(input ?? '').trim();
+  if (!raw) return null;
+  const gidMatch = raw.match(/gid:\/\/shopify\/\w+\/(\d+)/i);
+  if (gidMatch?.[1]) return gidMatch[1];
+  const digitsMatch = raw.match(/^(\d+)$/);
+  return digitsMatch?.[1] ?? raw;
+}
+
 async function computeProductQuantityFromCachedOrders(shopifyCustomerId, shopifyProductId) {
   const orders = await ShopifyOrder.find({ shopifyCustomerId: String(shopifyCustomerId) })
     .select('lineItems')
@@ -74,7 +83,7 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
       return res.status(500).json({ error: 'Failed to sync user from order' });
     }
 
-    const shopifyOrderId = String(order.id);
+    const shopifyOrderId = normalizeShopifyOrderId(order.id);
     const shopifyOrderNumber = order.order_number ? String(order.order_number) : undefined;
     console.log('[webhook order-created] synced customer', {
       shopifyCustomerId: customer?.id != null ? String(customer.id) : null,
@@ -89,10 +98,17 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
 
     // Cache the order in Mongo for order history/reconciliation.
     // We store full raw payload + reduced line items.
+    const orderIdentityFilter = {
+      $or: [
+        { shopifyOrderId },
+        ...(shopifyOrderNumber ? [{ shopifyCustomerId, shopifyOrderNumber }] : []),
+      ],
+    };
     await ShopifyOrder.findOneAndUpdate(
-      { shopifyOrderId },
+      orderIdentityFilter,
       {
         $set: {
+          shopifyOrderId,
           shopifyOrderNumber: order.order_number ? String(order.order_number) : undefined,
           shopifyCustomerId,
           financialStatus: order.financial_status,
@@ -212,7 +228,7 @@ router.post('/shopify/order-updated', verifyShopifyWebhook, async (req, res, nex
     const order = req.body;
     console.log('📝 Order updated:', order.order_number);
 
-    const shopifyOrderId = String(order.id);
+    const shopifyOrderId = normalizeShopifyOrderId(order.id);
     console.log('[webhook order-updated] received', {
       shopifyOrderId,
       shopifyOrderNumber: order.order_number ? String(order.order_number) : undefined,
@@ -223,10 +239,19 @@ router.post('/shopify/order-updated', verifyShopifyWebhook, async (req, res, nex
     const shopifyCustomerId = order.customer?.id != null ? String(order.customer.id) : null;
 
     // Update cached order snapshot
+    const orderIdentityFilter = {
+      $or: [
+        { shopifyOrderId },
+        ...(order.order_number != null && shopifyCustomerId
+          ? [{ shopifyCustomerId, shopifyOrderNumber: String(order.order_number) }]
+          : []),
+      ],
+    };
     await ShopifyOrder.findOneAndUpdate(
-      { shopifyOrderId },
+      orderIdentityFilter,
       {
         $set: {
+          shopifyOrderId,
           shopifyOrderNumber: order.order_number ? String(order.order_number) : undefined,
           shopifyCustomerId: shopifyCustomerId ?? undefined,
           financialStatus: order.financial_status,

@@ -171,10 +171,19 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
       const enrolledAt = order.createdAt ? new Date(order.createdAt).toISOString() : undefined;
 
       // Cache order snapshot in Mongo (for order history later/debug).
+      const shopifyOrderIdentityFilter = {
+        $or: [
+          { shopifyOrderId: String(shopifyOrderId) },
+          ...(shopifyOrderNumber
+            ? [{ shopifyCustomerId: String(shopifyCustomerId), shopifyOrderNumber }]
+            : []),
+        ],
+      };
       await ShopifyOrder.findOneAndUpdate(
-        { shopifyOrderId: String(shopifyOrderId) },
+        shopifyOrderIdentityFilter,
         {
           $set: {
+            shopifyOrderId: String(shopifyOrderId),
             shopifyOrderNumber: shopifyOrderNumber || undefined,
             shopifyCustomerId: String(shopifyCustomerId),
             orderCreatedAt: order.createdAt ? new Date(order.createdAt) : undefined,
