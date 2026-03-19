@@ -91,6 +91,8 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
         lastName
         email
         displayName
+        phone
+        state
       }
     }
   `;
@@ -108,6 +110,8 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
         lastName: customer.lastName ?? null,
         email: customer.email ?? null,
         displayName: customer.displayName ?? null,
+        phone: customer.phone ?? null,
+        state: customer.state ?? null,
       };
     }
   } catch (err) {
@@ -149,6 +153,8 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
           lastName: node.lastName ?? null,
           email: node.email ?? null,
           displayName: node.displayName ?? null,
+          phone: node.phone ?? null,
+          state: node.state ?? null,
         };
       }
     } catch (err) {
@@ -172,10 +178,15 @@ async function findOrCreateUserAndIssueLmsToken(customerId, email) {
   // `shopify-customer-login` is a lightweight Liquid login flow (customerId + email).
   // If `SHOPIFY_ADMIN_ACCESS_TOKEN` is configured, we fetch displayName/firstName/lastName
   // from Shopify Admin GraphQL (so we don't need to pass name data through the link).
-  const customerProfile = await fetchShopifyCustomerProfileFromAdminApi(normalizedId, normalizedEmail);
+  const customerProfile = await fetchShopifyCustomerProfileFromAdminApi(
+    normalizedId,
+    normalizedEmail
+  );
   const firstName = customerProfile?.firstName ?? undefined;
   const lastName = customerProfile?.lastName ?? undefined;
   const displayName = customerProfile?.displayName ?? undefined;
+  const phone = customerProfile?.phone ?? undefined;
+  const state = customerProfile?.state ?? undefined;
   const name =
     (typeof displayName === 'string' && displayName.trim() !== '' ? displayName.trim() : undefined) ||
     [firstName, lastName].filter(Boolean).join(' ').trim() ||
@@ -190,6 +201,7 @@ async function findOrCreateUserAndIssueLmsToken(customerId, email) {
       firstName,
       lastName,
       name: name || `Customer ${normalizedId}`,
+      phone,
       shopifyShopId: configuredShopId || undefined,
       // Legacy login (customerId + email) doesn't include the full Shopify customer JSON,
       // but we still persist a minimal snapshot so `/api/auth/me` can expose it.
@@ -199,6 +211,8 @@ async function findOrCreateUserAndIssueLmsToken(customerId, email) {
         ...(firstName ? { first_name: firstName } : {}),
         ...(lastName ? { last_name: lastName } : {}),
         ...(name ? { name } : {}),
+        ...(phone ? { phone } : {}),
+        ...(state ? { state } : {}),
       },
     });
   } else {
@@ -232,8 +246,22 @@ async function findOrCreateUserAndIssueLmsToken(customerId, email) {
         ...(lastName ? { last_name: lastName } : {}),
         ...(name ? { name } : {}),
         ...(customerProfile?.email ? { email: customerProfile.email } : {}),
+        ...(phone ? { phone } : {}),
+        ...(state ? { state } : {}),
       };
       user.lastSyncedAt = new Date();
+      await user.save();
+    }
+
+    // Keep phone in sync even if we didn't update name/email.
+    if (phone && (!user.phone || user.phone !== phone)) {
+      user.phone = phone;
+      user.lastSyncedAt = new Date();
+      user.shopifyData = {
+        ...(user.shopifyData || {}),
+        phone,
+        ...(state ? { state } : {}),
+      };
       await user.save();
     }
   }

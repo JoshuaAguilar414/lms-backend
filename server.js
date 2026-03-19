@@ -12,6 +12,7 @@ import courseRoutes from './routes/courses.js';
 import enrollmentRoutes from './routes/enrollments.js';
 import progressRoutes from './routes/progress.js';
 import ordersRoutes from './routes/orders.js';
+import debugShopifyRoutes from './routes/debug-shopify.js';
 import webhookRoutes from './routes/webhooks.js';
 
 // Load environment variables
@@ -68,6 +69,7 @@ app.use('/api/courses', courseRoutes);
 app.use('/api/enrollments', enrollmentRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/progress', progressRoutes);
+app.use('/api/debug/shopify', debugShopifyRoutes);
 app.use('/api/webhooks', webhookRoutes);
 
 // 404 handler

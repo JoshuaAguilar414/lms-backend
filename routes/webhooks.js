@@ -4,6 +4,7 @@ import Enrollment from '../models/Enrollment.js';
 import Course from '../models/Course.js';
 import User from '../models/User.js';
 import Progress from '../models/Progress.js';
+import ShopifyOrder from '../models/ShopifyOrder.js';
 
 const router = express.Router();
 
@@ -58,6 +59,37 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
       return res.status(500).json({ error: 'Failed to sync user from order' });
     }
 
+    const shopifyOrderId = String(order.id);
+    const shopifyCustomerId = String(customer.id);
+    const orderCreatedAt = order.created_at ? new Date(order.created_at) : null;
+    const orderUpdatedAt = order.updated_at ? new Date(order.updated_at) : null;
+
+    // Cache the order in Mongo for order history/reconciliation.
+    // We store full raw payload + reduced line items.
+    await ShopifyOrder.findOneAndUpdate(
+      { shopifyOrderId },
+      {
+        $set: {
+          shopifyOrderNumber: order.order_number ? String(order.order_number) : undefined,
+          shopifyCustomerId,
+          financialStatus: order.financial_status,
+          fulfillmentStatus: order.fulfillment_status,
+          cancelledAt: order.cancelled_at ? new Date(order.cancelled_at) : undefined,
+          orderCreatedAt: orderCreatedAt ?? undefined,
+          orderUpdatedAt: orderUpdatedAt ?? undefined,
+          rawOrderData: order,
+          lineItems: (order.line_items || []).map((li) => ({
+            title: li.title ?? li.name ?? undefined,
+            quantity: li.quantity ?? undefined,
+            shopifyProductId: li.product_id != null ? String(li.product_id) : undefined,
+            shopifyVariantId: li.variant_id != null ? String(li.variant_id) : undefined,
+            sku: li.sku ?? undefined,
+          })),
+        },
+      },
+      { upsert: true, new: true }
+    );
+
     // Process each line item (course product)
     for (const lineItem of order.line_items || []) {
       // Find course by Shopify product ID
@@ -84,10 +116,12 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
       const enrollment = await Enrollment.create({
         userId: user._id,
         courseId: course._id,
-        shopifyOrderId: String(order.id),
-        shopifyOrderNumber: order.order_number,
+        shopifyOrderId: shopifyOrderId,
+        shopifyOrderNumber: order.order_number ? String(order.order_number) : undefined,
         shopifyProductId: String(lineItem.product_id),
         orderData: order,
+        // Make enrolledAt align with Shopify order time (important for order history UI).
+        enrolledAt: orderCreatedAt ?? undefined,
         status: 'active',
       });
 
@@ -119,10 +153,37 @@ router.post('/shopify/order-updated', verifyShopifyWebhook, async (req, res, nex
     const order = req.body;
     console.log('📝 Order updated:', order.order_number);
 
+    const shopifyOrderId = String(order.id);
+    const shopifyCustomerId = order.customer?.id != null ? String(order.customer.id) : null;
+
+    // Update cached order snapshot
+    await ShopifyOrder.findOneAndUpdate(
+      { shopifyOrderId },
+      {
+        $set: {
+          shopifyOrderNumber: order.order_number ? String(order.order_number) : undefined,
+          shopifyCustomerId: shopifyCustomerId ?? undefined,
+          financialStatus: order.financial_status,
+          fulfillmentStatus: order.fulfillment_status,
+          cancelledAt: order.cancelled_at ? new Date(order.cancelled_at) : undefined,
+          orderUpdatedAt: order.updated_at ? new Date(order.updated_at) : undefined,
+          rawOrderData: order,
+          lineItems: (order.line_items || []).map((li) => ({
+            title: li.title ?? li.name ?? undefined,
+            quantity: li.quantity ?? undefined,
+            shopifyProductId: li.product_id != null ? String(li.product_id) : undefined,
+            shopifyVariantId: li.variant_id != null ? String(li.variant_id) : undefined,
+            sku: li.sku ?? undefined,
+          })),
+        },
+      },
+      { upsert: true, new: true }
+    );
+
     // Update enrollment status based on order status
     if (order.financial_status === 'refunded' || order.cancelled_at) {
       await Enrollment.updateMany(
-        { shopifyOrderId: String(order.id) },
+        { shopifyOrderId },
         { status: 'cancelled' }
       );
     }

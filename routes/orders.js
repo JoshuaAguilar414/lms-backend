@@ -1,6 +1,8 @@
 import express from 'express';
 import Course from '../models/Course.js';
 import User from '../models/User.js';
+import Enrollment from '../models/Enrollment.js';
+import Progress from '../models/Progress.js';
 import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -81,10 +83,10 @@ function getShopifyCustomerGid(shopifyCustomerId) {
 }
 
 const CUSTOMER_ORDERS_QUERY = `
-  query CustomerOrders($id: ID!) {
+  query CustomerOrders($id: ID!, $cursor: String) {
     customer(id: $id) {
       id
-      orders(first: 50, sortKey: CREATED_AT, reverse: true) {
+      orders(first: 10, after: $cursor, sortKey: CREATED_AT, reverse: true) {
         edges {
           node {
             id
@@ -115,6 +117,10 @@ const CUSTOMER_ORDERS_QUERY = `
             }
           }
         }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
       }
     }
   }
@@ -122,111 +128,26 @@ const CUSTOMER_ORDERS_QUERY = `
 
 router.get('/', authenticate, async (req, res, next) => {
   try {
-    const shopifyCustomerGid = getShopifyCustomerGid(req.user?.shopifyCustomerId);
-    if (!shopifyCustomerGid) {
-      return res.status(400).json({ error: 'Missing/invalid shopifyCustomerId in token' });
-    }
+    const enrollments = await Enrollment.find({ userId: req.user.userId })
+      .populate('courseId', 'title thumbnail handle scormUrl admissionId totalLessons')
+      .populate('userId', 'name email')
+      .sort({ enrolledAt: -1 });
 
-    const user = await User.findById(req.user.userId).select('name email');
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    const { shopifyShopDomain, shopifyAdminAccessToken, shopifyAdminApiVersion } =
-      getShopifyAdminConfig();
-    if (!shopifyShopDomain || !shopifyAdminAccessToken) {
-      return res.status(500).json({ error: 'Shopify Admin API not configured' });
-    }
-
-    const endpoint = `https://${shopifyShopDomain}/admin/api/${shopifyAdminApiVersion}/graphql.json`;
-    const headers = {
-      'Content-Type': 'application/json',
-      'X-Shopify-Access-Token': shopifyAdminAccessToken,
-    };
-
-    const respJson = await shopifyPostGraphql(endpoint, headers, {
-      query: CUSTOMER_ORDERS_QUERY,
-      variables: { id: shopifyCustomerGid },
-    });
-    const edges = respJson?.data?.data?.customer?.orders?.edges ?? [];
-
-    const candidates = [];
-    const productIdsSet = new Set();
-
-    for (const orderEdge of edges) {
-      const order = orderEdge?.node;
-      if (!order) continue;
-
-      const shopifyOrderId = parseNumericFromGid(order.id);
-      if (!shopifyOrderId) continue;
-
-      const shopifyOrderNumber = parseShopifyOrderNumber(order.name);
-      const enrolledAt = order.createdAt
-        ? new Date(order.createdAt).toISOString()
-        : new Date().toISOString();
-
-      // Map fulfillment to "completed" UX.
-      const isCompleted =
-        order.fulfillmentStatus === 'fulfilled' || order.fulfillmentStatus === 'delivered';
-
-      const lineItemEdges = order?.lineItems?.edges ?? [];
-      let lineIndex = 0;
-      for (const lineEdge of lineItemEdges) {
-        const line = lineEdge?.node;
-        lineIndex += 1;
-
-        const productGid = line?.variant?.product?.id;
-        const shopifyProductId = parseNumericFromGid(productGid);
-        if (!shopifyProductId) continue;
-
-        candidates.push({
-          lineIndex,
-          shopifyOrderId,
-          shopifyOrderNumber,
-          shopifyProductId,
-          enrolledAt,
-          isCompleted,
-        });
-        productIdsSet.add(shopifyProductId);
-      }
-    }
-
-    const productIds = [...productIdsSet];
-    const courses = productIds.length
-      ? await Course.find({
-          shopifyProductId: { $in: productIds },
-          isActive: true,
-        }).select('shopifyProductId title thumbnail handle scormUrl admissionId totalLessons')
+    const enrollmentIds = enrollments.map((e) => e._id);
+    const progressDocs = enrollmentIds.length
+      ? await Progress.find({ enrollmentId: { $in: enrollmentIds } })
       : [];
 
-    const courseByShopifyProductId = new Map(
-      courses.map((c) => [String(c.shopifyProductId), c])
+    const progressByEnrollmentId = new Map(
+      progressDocs.map((p) => [String(p.enrollmentId), { progress: p.progress, completed: p.completed }])
     );
 
-    const items = [];
-    for (const c of candidates) {
-      const course = courseByShopifyProductId.get(String(c.shopifyProductId));
-      if (!course) continue;
-
-      items.push({
-        _id: `${c.shopifyOrderId}:${c.shopifyProductId}:${c.lineIndex}`,
-        userId: { _id: user._id.toString(), name: user.name, email: user.email },
-        courseId: {
-          _id: course._id.toString(),
-          title: course.title,
-          thumbnail: course.thumbnail,
-          handle: course.handle,
-          scormUrl: course.scormUrl,
-          admissionId: course.admissionId,
-          totalLessons: course.totalLessons,
-        },
-        shopifyOrderId: String(c.shopifyOrderId),
-        shopifyOrderNumber: c.shopifyOrderNumber || undefined,
-        status: c.isCompleted ? 'completed' : 'active',
-        enrolledAt: c.enrolledAt,
-        progress: c.isCompleted ? { progress: 100, completed: true } : null,
-      });
-    }
-
-    res.json(items);
+    res.json(
+      enrollments.map((enrollment) => ({
+        ...enrollment.toObject(),
+        progress: progressByEnrollmentId.get(String(enrollment._id)) ?? null,
+      }))
+    );
   } catch (error) {
     next(error);
   }
