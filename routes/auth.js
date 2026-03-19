@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import express from 'express';
+import axios from 'axios';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import { authenticate } from '../middleware/auth.js';
@@ -27,66 +28,182 @@ function verifyLinkSignature(customerId, email, signature) {
   return crypto.timingSafeEqual(a, b);
 }
 
+function getShopifyAdminConfig() {
+  const shopifyShopDomain = process.env.SHOPIFY_SHOP_DOMAIN; // e.g. marketplace.vectra-intl.com
+  // Support both variable names (some setups use SHOPIFY_ADMIN_API_TOKEN).
+  const shopifyAdminAccessToken =
+    process.env.SHOPIFY_ADMIN_ACCESS_TOKEN ?? process.env.SHOPIFY_ADMIN_API_TOKEN;
+  const shopifyAdminApiVersion = process.env.SHOPIFY_ADMIN_API_VERSION || '2025-01';
+  return { shopifyShopDomain, shopifyAdminAccessToken, shopifyAdminApiVersion };
+}
+
+async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
+  const { shopifyShopDomain, shopifyAdminAccessToken, shopifyAdminApiVersion } = getShopifyAdminConfig();
+  if (!shopifyShopDomain || !shopifyAdminAccessToken) return null; // optional feature
+
+  const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  const normalizedId = String(customerId).replace(/^gid:\/\/shopify\/Customer\//i, '');
+
+  const endpoint = `https://${shopifyShopDomain}/admin/api/${shopifyAdminApiVersion}/graphql.json`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Shopify-Access-Token': shopifyAdminAccessToken,
+  };
+
+  // Try lookup by id first (matches your working curl flow).
+  const queryById = `
+    query CustomerById($id: ID!) {
+      customer(id: $id) {
+        id
+        firstName
+        lastName
+        email
+        displayName
+      }
+    }
+  `;
+
+  const idVariables = { id: `gid://shopify/Customer/${normalizedId}` };
+  try {
+    const resp = await axios.post(
+      endpoint,
+      { query: queryById, variables: idVariables },
+      { headers, timeout: 10000 }
+    );
+    const customer = resp?.data?.data?.customer;
+    if (customer) {
+      return {
+        firstName: customer.firstName ?? null,
+        lastName: customer.lastName ?? null,
+        email: customer.email ?? null,
+        displayName: customer.displayName ?? null,
+      };
+    }
+  } catch (err) {
+    // Don't block login if Shopify Admin API lookup fails.
+    console.warn(
+      'Shopify Admin API lookup failed (by id):',
+      err?.response?.data || err?.message || err
+    );
+  }
+
+  // Fallback: lookup by email (if provided).
+  if (normalizedEmail) {
+    const queryByEmail = `
+      query CustomersByEmail($query: String!) {
+        customers(first: 1, query: $query) {
+          edges {
+            node {
+              id
+              firstName
+              lastName
+              email
+              displayName
+            }
+          }
+        }
+      }
+    `;
+
+    const variables = { query: `email:${normalizedEmail}` };
+    try {
+      const resp = await axios.post(
+        endpoint,
+        { query: queryByEmail, variables },
+        { headers, timeout: 10000 }
+      );
+      const node = resp?.data?.data?.customers?.edges?.[0]?.node;
+      if (node) {
+        return {
+          firstName: node.firstName ?? null,
+          lastName: node.lastName ?? null,
+          email: node.email ?? null,
+          displayName: node.displayName ?? null,
+        };
+      }
+    } catch (err) {
+      console.warn(
+        'Shopify Admin API lookup failed (by email):',
+        err?.response?.data || err?.message || err
+      );
+    }
+  }
+
+  return null;
+}
+
 /**
  * Find or create user by Shopify customer ID and email; issue LMS JWT.
  */
-async function findOrCreateUserAndIssueLmsToken(customerId, email, customerMeta = {}) {
+async function findOrCreateUserAndIssueLmsToken(customerId, email) {
   const normalizedId = String(customerId).replace(/^gid:\/\/shopify\/Customer\//i, '');
   const normalizedEmail = String(email).trim().toLowerCase();
 
   // `shopify-customer-login` is a lightweight Liquid login flow (customerId + email).
-  // If the link also includes first/last/name, we persist it so `/api/auth/me` shows real names.
-  const firstName =
-    typeof customerMeta.firstName === 'string'
-      ? customerMeta.firstName.trim()
-      : typeof customerMeta.givenName === 'string'
-        ? customerMeta.givenName.trim()
-        : undefined;
-  const lastName =
-    typeof customerMeta.lastName === 'string'
-      ? customerMeta.lastName.trim()
-      : typeof customerMeta.familyName === 'string'
-        ? customerMeta.familyName.trim()
-        : undefined;
+  // If `SHOPIFY_ADMIN_ACCESS_TOKEN` is configured, we fetch displayName/firstName/lastName
+  // from Shopify Admin GraphQL (so we don't need to pass name data through the link).
+  const customerProfile = await fetchShopifyCustomerProfileFromAdminApi(normalizedId, normalizedEmail);
+  const firstName = customerProfile?.firstName ?? undefined;
+  const lastName = customerProfile?.lastName ?? undefined;
+  const displayName = customerProfile?.displayName ?? undefined;
   const name =
-    typeof customerMeta.name === 'string'
-      ? customerMeta.name.trim()
-      : [firstName, lastName].filter(Boolean).join(' ').trim() || undefined;
+    (typeof displayName === 'string' && displayName.trim() !== '' ? displayName.trim() : undefined) ||
+    [firstName, lastName].filter(Boolean).join(' ').trim() ||
+    undefined;
 
   let user = await User.findOne({ shopifyCustomerId: normalizedId });
   if (!user) {
+    const configuredShopId = getConfiguredShopifyShopId();
     user = await User.create({
       shopifyCustomerId: normalizedId,
-      email: normalizedEmail || `customer-${normalizedId}@shopify.local`,
+      email: customerProfile?.email || normalizedEmail || `customer-${normalizedId}@shopify.local`,
       firstName,
       lastName,
       name: name || `Customer ${normalizedId}`,
+      shopifyShopId: configuredShopId || undefined,
       // Legacy login (customerId + email) doesn't include the full Shopify customer JSON,
       // but we still persist a minimal snapshot so `/api/auth/me` can expose it.
       shopifyData: {
         id: normalizedId,
-        email: normalizedEmail || undefined,
+        email: (customerProfile?.email ?? normalizedEmail) || undefined,
         ...(firstName ? { first_name: firstName } : {}),
         ...(lastName ? { last_name: lastName } : {}),
         ...(name ? { name } : {}),
       },
     });
   } else {
-    // If we receive "real" names from the link and the record doesn't have them yet,
-    // update for this user.
-    const shouldUpdateName = name && (!user.name || user.name === `Customer ${normalizedId}`);
-    const shouldUpdateFirstLast = Boolean(firstName && (!user.firstName || !user.lastName));
-    if (shouldUpdateName || shouldUpdateFirstLast) {
-      user.name = shouldUpdateName ? name : user.name;
-      if (firstName && (!user.firstName || shouldUpdateFirstLast)) user.firstName = firstName;
-      if (lastName && (!user.lastName || shouldUpdateFirstLast)) user.lastName = lastName;
+    const configuredShopId = getConfiguredShopifyShopId();
+    if (configuredShopId && !user.shopifyShopId) user.shopifyShopId = configuredShopId;
+
+    const isGenericName = !user.name || user.name === `Customer ${normalizedId}`;
+    const shouldUpdateName = Boolean(name && isGenericName);
+    const shouldUpdateFirstLast = Boolean(
+      firstName && lastName && (!user.firstName || !user.lastName)
+    );
+    const shouldUpdateEmail = Boolean(
+      customerProfile?.email &&
+        (!user.email ||
+          user.email.toLowerCase() !== customerProfile.email.toLowerCase() ||
+          user.email.includes(`customer-${normalizedId}@shopify.local`))
+    );
+
+    if (shouldUpdateName || shouldUpdateFirstLast || shouldUpdateEmail) {
+      if (shouldUpdateName) user.name = name || user.name;
+      if (shouldUpdateFirstLast) {
+        if (firstName) user.firstName = firstName;
+        if (lastName) user.lastName = lastName;
+      }
+      if (shouldUpdateEmail) user.email = customerProfile?.email || user.email;
+
       // Keep shopifyData snapshot somewhat fresh for `/api/auth/me`
       user.shopifyData = {
         ...(user.shopifyData || {}),
         ...(firstName ? { first_name: firstName } : {}),
         ...(lastName ? { last_name: lastName } : {}),
         ...(name ? { name } : {}),
+        ...(customerProfile?.email ? { email: customerProfile.email } : {}),
       };
+      user.lastSyncedAt = new Date();
       await user.save();
     }
   }
@@ -120,6 +237,19 @@ function parseShopifyCustomerId(sub) {
   if (gidMatch) return gidMatch[1];
   if (/^\d+$/.test(str)) return str;
   return str;
+}
+
+/**
+ * Optional fixed numeric shop/store id for a single-shop deployment.
+ * Useful when session/webhook payloads don't include a shop id we can extract.
+ */
+function getConfiguredShopifyShopId() {
+  const raw = process.env.SHOPIFY_SHOP_ID;
+  if (!raw) return null;
+  const str = String(raw).trim();
+  if (!str) return null;
+  // Allow passing either "77453132000" or a GID-like value; extract the numeric part.
+  return str.match(/(\d+)/)?.[1] ?? null;
 }
 
 /**
@@ -210,6 +340,8 @@ router.post('/shopify-verify', async (req, res, next) => {
       tokenShopId = destLike.match(/(\d+)/)?.[1] ?? null;
     }
 
+    const configuredShopId = getConfiguredShopifyShopId();
+
     let user = await User.findOne({ shopifyCustomerId: customerId });
     if (!user) {
       user = await User.create({
@@ -223,12 +355,13 @@ router.post('/shopify-verify', async (req, res, next) => {
           .trim() || `Customer ${customerId}`,
         shopifyData: payload,
         shopifyShopDomain: tokenShopDomain || undefined,
-        shopifyShopId: tokenShopId ? String(tokenShopId) : undefined,
+        shopifyShopId: tokenShopId ? String(tokenShopId) : configuredShopId || undefined,
       });
     } else {
       // Populate shop/store fields for older users.
       if (tokenShopDomain && !user.shopifyShopDomain) user.shopifyShopDomain = tokenShopDomain;
       if (tokenShopId && !user.shopifyShopId) user.shopifyShopId = String(tokenShopId);
+      if (configuredShopId && !user.shopifyShopId) user.shopifyShopId = configuredShopId;
       // Keep latest session payload snapshot.
       user.shopifyData = payload;
       user.lastSyncedAt = new Date();
@@ -341,16 +474,6 @@ router.get('/shopify-customer-login', async (req, res, next) => {
     const email = req.query.email;
     const signature = req.query.signature;
 
-    const getString = (v) => {
-      if (typeof v === 'string') return v;
-      if (Array.isArray(v)) return v[0];
-      return undefined;
-    };
-
-    const firstName = getString(req.query.firstName);
-    const lastName = getString(req.query.lastName);
-    const name = getString(req.query.name);
-
     if (!customerId || !email) {
       return res.status(400).json({
         error: 'Missing customerId or email',
@@ -365,11 +488,7 @@ router.get('/shopify-customer-login', async (req, res, next) => {
       });
     }
 
-    const { lmsToken } = await findOrCreateUserAndIssueLmsToken(customerId, email, {
-      firstName,
-      lastName,
-      name,
-    });
+    const { lmsToken } = await findOrCreateUserAndIssueLmsToken(customerId, email);
     redirectToFrontendWithToken(res, lmsToken);
   } catch (error) {
     next(error);
@@ -405,6 +524,11 @@ router.get('/me', authenticate, async (req, res, next) => {
       shopifyShopId =
         shopifyData?.shop_id ?? shopifyData?.shopId ?? null ??
         (typeof destLike === 'string' ? destLike.match(/(\d+)/)?.[1] ?? null : null);
+    }
+
+    // Final fallback: fixed shop id configured per deployment.
+    if (!shopifyShopId) {
+      shopifyShopId = getConfiguredShopifyShopId();
     }
 
     res.json({
