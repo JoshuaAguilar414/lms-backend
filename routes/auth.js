@@ -148,6 +148,19 @@ router.post('/shopify-verify', async (req, res, next) => {
       return res.status(401).json({ error: 'Token missing customer id (sub)' });
     }
 
+    // Best-effort extraction of Shopify shop/store from the session JWT.
+    // Many Shopify session tokens include "dest" (shop domain / url).
+    const destLike = payload?.dest ?? payload?.aud ?? payload?.iss ?? null;
+    let tokenShopDomain = null;
+    if (typeof destLike === 'string') {
+      tokenShopDomain = destLike.replace(/^https?:\/\//i, '').split('/')[0] || null;
+    }
+    let tokenShopId =
+      payload?.shop_id ?? payload?.shopId ?? null;
+    if (!tokenShopId && typeof destLike === 'string') {
+      tokenShopId = destLike.match(/(\d+)/)?.[1] ?? null;
+    }
+
     let user = await User.findOne({ shopifyCustomerId: customerId });
     if (!user) {
       user = await User.create({
@@ -160,7 +173,17 @@ router.post('/shopify-verify', async (req, res, next) => {
           .join(' ')
           .trim() || `Customer ${customerId}`,
         shopifyData: payload,
+        shopifyShopDomain: tokenShopDomain || undefined,
+        shopifyShopId: tokenShopId ? String(tokenShopId) : undefined,
       });
+    } else {
+      // Populate shop/store fields for older users.
+      if (tokenShopDomain && !user.shopifyShopDomain) user.shopifyShopDomain = tokenShopDomain;
+      if (tokenShopId && !user.shopifyShopId) user.shopifyShopId = String(tokenShopId);
+      // Keep latest session payload snapshot.
+      user.shopifyData = payload;
+      user.lastSyncedAt = new Date();
+      await user.save();
     }
 
     const jwtSecret = process.env.JWT_SECRET;
@@ -296,12 +319,31 @@ router.get('/shopify-customer-login', async (req, res, next) => {
  */
 router.get('/me', authenticate, async (req, res, next) => {
   try {
-    const user = await User.findById(req.user.userId)
-      .select('-shopifyData')
-      .lean();
+    const user = await User.findById(req.user.userId).lean();
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
+
+    // We prefer values stored from webhook headers (per store/customer).
+    // Fallback: best-effort extraction from shopifyData (older users / other login flows).
+    let shopifyShopDomain = user.shopifyShopDomain ?? null;
+    let shopifyShopId = user.shopifyShopId ?? null;
+
+    const shopifyData = user.shopifyData || {};
+    const destLike = shopifyData?.dest ?? shopifyData?.aud ?? shopifyData?.iss ?? null;
+
+    if (!shopifyShopDomain && typeof destLike === 'string') {
+      // Convert something like "https://xxxx.myshopify.com/" -> "xxxx.myshopify.com"
+      shopifyShopDomain = destLike.replace(/^https?:\/\//i, '').split('/')[0] || null;
+    }
+
+    if (!shopifyShopId) {
+      // Best-effort numeric extraction (only if the token actually contains a number)
+      shopifyShopId =
+        shopifyData?.shop_id ?? shopifyData?.shopId ?? null ??
+        (typeof destLike === 'string' ? destLike.match(/(\d+)/)?.[1] ?? null : null);
+    }
+
     res.json({
       id: user._id,
       email: user.email,
@@ -310,6 +352,8 @@ router.get('/me', authenticate, async (req, res, next) => {
       lastName: user.lastName,
       phone: user.phone,
       shopifyCustomerId: user.shopifyCustomerId,
+      shopifyShopDomain,
+      shopifyShopId: shopifyShopId ? String(shopifyShopId) : null,
     });
   } catch (error) {
     next(error);

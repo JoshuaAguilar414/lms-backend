@@ -38,6 +38,16 @@ const userSchema = new mongoose.Schema(
     shopifyData: {
       type: mongoose.Schema.Types.Mixed,
     },
+    // Shopify store info (needed to build per-customer Shopify account links)
+    shopifyShopDomain: {
+      type: String,
+      index: true,
+    },
+    shopifyShopId: {
+      // Numeric shop id used in https://shopify.com/{shopId}/account/orders
+      type: String,
+      index: true,
+    },
     // Last sync timestamp
     lastSyncedAt: {
       type: Date,

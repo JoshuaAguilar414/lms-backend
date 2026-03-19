@@ -28,6 +28,8 @@ export const authenticate = async (req, res, next) => {
 export const verifyShopifyWebhook = (req, res, next) => {
   const hmac = req.headers['x-shopify-hmac-sha256'];
   const shop = req.headers['x-shopify-shop-domain'];
+  const shopId =
+    req.headers['x-shopify-shop-id'] ?? req.headers['x-shopify-shopID'] ?? null;
   const topic = req.headers['x-shopify-topic'];
 
   if (!hmac || !shop || !topic) {
@@ -54,6 +56,7 @@ export const verifyShopifyWebhook = (req, res, next) => {
   }
 
   req.shopifyShop = shop;
+  req.shopifyShopId = shopId;
   req.shopifyTopic = topic;
   next();
 };

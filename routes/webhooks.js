@@ -8,7 +8,7 @@ import Progress from '../models/Progress.js';
 const router = express.Router();
 
 /** Sync customer payload to User (from order.customer or customer webhook). */
-async function syncCustomerToUser(customer) {
+async function syncCustomerToUser(customer, shopifyShopDomain, shopifyShopId) {
   const id = String(customer.id);
   const name = [customer.first_name, customer.last_name].filter(Boolean).join(' ').trim();
   const existing = await User.findOne({ shopifyCustomerId: id });
@@ -19,6 +19,8 @@ async function syncCustomerToUser(customer) {
     existing.name = name || existing.name;
     existing.phone = customer.phone ?? existing.phone;
     existing.shopifyData = customer;
+    if (shopifyShopDomain) existing.shopifyShopDomain = shopifyShopDomain;
+    if (shopifyShopId) existing.shopifyShopId = shopifyShopId;
     existing.lastSyncedAt = new Date();
     await existing.save();
     return existing;
@@ -31,6 +33,8 @@ async function syncCustomerToUser(customer) {
     name: name || `Customer ${id}`,
     phone: customer.phone,
     shopifyData: customer,
+    shopifyShopDomain: shopifyShopDomain || undefined,
+    shopifyShopId: shopifyShopId || undefined,
   });
 }
 
@@ -49,7 +53,7 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
       return res.status(400).json({ error: 'No customer data in order' });
     }
 
-    const user = await syncCustomerToUser(customer);
+    const user = await syncCustomerToUser(customer, req.shopifyShop, req.shopifyShopId);
     if (!user._id) {
       return res.status(500).json({ error: 'Failed to sync user from order' });
     }
@@ -207,7 +211,7 @@ router.post('/shopify/customers-create', verifyShopifyWebhook, async (req, res, 
     const customer = req.body;
     console.log('👤 Customer created:', customer.email);
 
-    await syncCustomerToUser(customer);
+    await syncCustomerToUser(customer, req.shopifyShop, req.shopifyShopId);
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('❌ Error syncing customer create:', error);
@@ -224,7 +228,7 @@ router.post('/shopify/customers-update', verifyShopifyWebhook, async (req, res, 
     const customer = req.body;
     console.log('👤 Customer updated:', customer.email);
 
-    await syncCustomerToUser(customer);
+    await syncCustomerToUser(customer, req.shopifyShop, req.shopifyShopId);
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('❌ Error syncing customer update:', error);
