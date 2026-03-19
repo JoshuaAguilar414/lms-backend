@@ -60,6 +60,14 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
     }
 
     const shopifyOrderId = String(order.id);
+    const shopifyOrderNumber = order.order_number ? String(order.order_number) : undefined;
+    console.log('[webhook order-created] synced customer', {
+      shopifyCustomerId: customer?.id != null ? String(customer.id) : null,
+      userId: user._id.toString(),
+      shopifyOrderId,
+      shopifyOrderNumber,
+    });
+
     const shopifyCustomerId = String(customer.id);
     const orderCreatedAt = order.created_at ? new Date(order.created_at) : null;
     const orderUpdatedAt = order.updated_at ? new Date(order.updated_at) : null;
@@ -91,7 +99,12 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
     );
 
     // Process each line item (course product)
+    let processedLineItems = 0;
+    let matchedCourses = 0;
+    let enrollmentsCreated = 0;
+    let progressCreated = 0;
     for (const lineItem of order.line_items || []) {
+      processedLineItems += 1;
       // Find course by Shopify product ID
       const course = await Course.findOne({ shopifyProductId: String(lineItem.product_id) });
 
@@ -99,6 +112,7 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
         console.log(`⚠️ Course not found for product ID: ${lineItem.product_id}`);
         continue;
       }
+      matchedCourses += 1;
 
       // Check if enrollment already exists
       const existingEnrollment = await Enrollment.findOne({
@@ -124,6 +138,7 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
         enrolledAt: orderCreatedAt ?? undefined,
         status: 'active',
       });
+      enrollmentsCreated += 1;
 
       // Create initial progress record
       await Progress.create({
@@ -133,9 +148,18 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
         progress: 0,
         completed: false,
       });
+      progressCreated += 1;
 
       console.log(`✅ Created enrollment for course: ${course.title}`);
     }
+
+    console.log('[webhook order-created] summary', {
+      shopifyOrderId,
+      processedLineItems,
+      matchedCourses,
+      enrollmentsCreated,
+      progressCreated,
+    });
 
     res.status(200).json({ success: true });
   } catch (error) {
@@ -154,6 +178,13 @@ router.post('/shopify/order-updated', verifyShopifyWebhook, async (req, res, nex
     console.log('📝 Order updated:', order.order_number);
 
     const shopifyOrderId = String(order.id);
+    console.log('[webhook order-updated] received', {
+      shopifyOrderId,
+      shopifyOrderNumber: order.order_number ? String(order.order_number) : undefined,
+      financialStatus: order.financial_status,
+      cancelledAt: order.cancelled_at ? 'present' : null,
+    });
+
     const shopifyCustomerId = order.customer?.id != null ? String(order.customer.id) : null;
 
     // Update cached order snapshot
@@ -182,10 +213,15 @@ router.post('/shopify/order-updated', verifyShopifyWebhook, async (req, res, nex
 
     // Update enrollment status based on order status
     if (order.financial_status === 'refunded' || order.cancelled_at) {
-      await Enrollment.updateMany(
+      const updateResult = await Enrollment.updateMany(
         { shopifyOrderId },
         { status: 'cancelled' }
       );
+      console.log('[webhook order-updated] cancelled enrollments', {
+        shopifyOrderId,
+        matchedCount: updateResult?.matchedCount,
+        modifiedCount: updateResult?.modifiedCount,
+      });
     }
 
     res.status(200).json({ success: true });

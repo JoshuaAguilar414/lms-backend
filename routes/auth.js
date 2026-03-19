@@ -99,6 +99,11 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
 
   const idVariables = { id: `gid://shopify/Customer/${normalizedId}` };
   try {
+    console.log('[shopify customer profile] lookup by id', {
+      shopifyShopDomain,
+      shopifyAdminApiVersion,
+      customerId: normalizedId,
+    });
     const respJson = await shopifyPostGraphql(endpoint, headers, {
       query: queryById,
       variables: idVariables,
@@ -118,7 +123,7 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
     // Don't block login if Shopify Admin API lookup fails.
     console.warn(
       'Shopify Admin API lookup failed (by id):',
-      err?.response?.data || err?.message || err
+      err?.message || err
     );
   }
 
@@ -142,6 +147,11 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
 
     const variables = { query: `email:${normalizedEmail}` };
     try {
+      console.log('[shopify customer profile] lookup by email', {
+        shopifyShopDomain,
+        shopifyAdminApiVersion,
+        email: normalizedEmail,
+      });
       const respJson = await shopifyPostGraphql(endpoint, headers, {
         query: queryByEmail,
         variables,
@@ -160,7 +170,7 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
     } catch (err) {
       console.warn(
         'Shopify Admin API lookup failed (by email):',
-        err?.response?.data || err?.message || err
+        err?.message || err
       );
     }
   }
@@ -559,6 +569,10 @@ router.get('/shopify-customer-login', async (req, res, next) => {
  */
 router.get('/me', authenticate, async (req, res, next) => {
   try {
+    console.log('[auth me] request', {
+      userId: req.user?.userId,
+      shopifyCustomerId: req.user?.shopifyCustomerId,
+    });
     const user = await User.findById(req.user.userId).lean();
     if (!user) {
       return res.status(404).json({ error: 'User not found' });

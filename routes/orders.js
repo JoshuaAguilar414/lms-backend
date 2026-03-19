@@ -128,6 +128,11 @@ const CUSTOMER_ORDERS_QUERY = `
 
 router.get('/', authenticate, async (req, res, next) => {
   try {
+    console.log('[orders] request', {
+      userId: req.user?.userId,
+      shopifyCustomerId: req.user?.shopifyCustomerId,
+    });
+
     const enrollments = await Enrollment.find({ userId: req.user.userId })
       .populate('courseId', 'title thumbnail handle scormUrl admissionId totalLessons')
       .populate('userId', 'name email')
@@ -141,6 +146,11 @@ router.get('/', authenticate, async (req, res, next) => {
     const progressByEnrollmentId = new Map(
       progressDocs.map((p) => [String(p.enrollmentId), { progress: p.progress, completed: p.completed }])
     );
+
+    console.log('[orders] loaded', {
+      enrollments: enrollments.length,
+      progressDocs: progressDocs.length,
+    });
 
     res.json(
       enrollments.map((enrollment) => ({
