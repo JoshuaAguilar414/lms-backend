@@ -141,6 +141,10 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
         shopifyOrderId: shopifyOrderId,
         shopifyOrderNumber: order.order_number ? String(order.order_number) : undefined,
         shopifyProductId: String(lineItem.product_id),
+        shopifyProductType: course.productType,
+        shopifyProductDescription: course.description,
+        shopifyProductTags: Array.isArray(course.tags) ? course.tags : [],
+        shopifyProductImage: course.image || course.thumbnail,
         orderData: order,
         // Make enrolledAt align with Shopify order time (important for order history UI).
         enrolledAt: orderCreatedAt ?? undefined,
@@ -250,11 +254,20 @@ router.post('/shopify/product-created', verifyShopifyWebhook, async (req, res, n
     const course = await Course.findOne({ shopifyProductId: String(product.id) });
 
     const handle = product.handle || undefined;
+    const tags = Array.isArray(product.tags)
+      ? product.tags
+      : typeof product.tags === 'string'
+        ? product.tags.split(',').map((t) => t.trim()).filter(Boolean)
+        : [];
+    const image = product.image?.src || product.images?.[0]?.src;
     if (course) {
       // Update existing course
       course.title = product.title;
       course.description = product.body_html;
-      course.thumbnail = product.images?.[0]?.src;
+      course.productType = product.product_type || undefined;
+      course.tags = tags;
+      course.thumbnail = image;
+      course.image = image;
       course.handle = handle;
       course.shopifyData = product;
       course.lastSyncedAt = new Date();
@@ -266,7 +279,10 @@ router.post('/shopify/product-created', verifyShopifyWebhook, async (req, res, n
         shopifyProductId: String(product.id),
         title: product.title,
         description: product.body_html,
-        thumbnail: product.images?.[0]?.src,
+        productType: product.product_type || undefined,
+        tags,
+        thumbnail: image,
+        image,
         handle,
         shopifyData: product,
       });
@@ -293,7 +309,14 @@ router.post('/shopify/product-updated', verifyShopifyWebhook, async (req, res, n
     if (course) {
       course.title = product.title;
       course.description = product.body_html;
-      course.thumbnail = product.images?.[0]?.src;
+      course.productType = product.product_type || course.productType;
+      course.tags = Array.isArray(product.tags)
+        ? product.tags
+        : typeof product.tags === 'string'
+          ? product.tags.split(',').map((t) => t.trim()).filter(Boolean)
+          : course.tags;
+      course.thumbnail = product.image?.src || product.images?.[0]?.src || course.thumbnail;
+      course.image = product.image?.src || product.images?.[0]?.src || course.image;
       course.handle = product.handle || course.handle;
       course.shopifyData = product;
       course.lastSyncedAt = new Date();

@@ -30,6 +30,22 @@ const enrollmentSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    shopifyProductType: {
+      type: String,
+      trim: true,
+    },
+    shopifyProductDescription: {
+      type: String,
+    },
+    shopifyProductTags: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
+    shopifyProductImage: {
+      type: String,
+    },
     // Enrollment status
     status: {
       type: String,

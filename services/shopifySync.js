@@ -84,6 +84,13 @@ const CUSTOMER_ORDERS_QUERY = `
                     product {
                       id
                       title
+                      productType
+                      description
+                      tags
+                      featuredImage {
+                        url
+                        altText
+                      }
                     }
                   }
                 }
@@ -196,7 +203,7 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
         if (!shopifyProductId) continue;
 
         let course = await Course.findOne({ shopifyProductId: String(shopifyProductId), isActive: true }).select(
-          '_id title scormUrl admissionId totalLessons thumbnail handle shopifyProductId'
+          '_id title scormUrl admissionId totalLessons thumbnail image handle shopifyProductId description productType tags'
         );
         if (!course) {
           // Auto-backfill minimal course when product exists in orders but not in LMS cache.
@@ -207,8 +214,11 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
           course = await Course.create({
             shopifyProductId: String(shopifyProductId),
             title: fallbackTitle,
-            description: '',
-            thumbnail: undefined,
+            description: line?.variant?.product?.description ?? '',
+            productType: line?.variant?.product?.productType ?? undefined,
+            tags: Array.isArray(line?.variant?.product?.tags) ? line.variant.product.tags : [],
+            thumbnail: line?.variant?.product?.featuredImage?.url ?? undefined,
+            image: line?.variant?.product?.featuredImage?.url ?? undefined,
             shopifyData: {
               source: 'order-sync-backfill',
               productId: String(shopifyProductId),
@@ -255,6 +265,10 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
               shopifyOrderId: String(shopifyOrderId),
               shopifyOrderNumber: shopifyOrderNumber || undefined,
               shopifyProductId: String(shopifyProductId),
+              shopifyProductType: course.productType,
+              shopifyProductDescription: course.description,
+              shopifyProductTags: Array.isArray(course.tags) ? course.tags : [],
+              shopifyProductImage: course.image || course.thumbnail,
               orderData: order,
               enrolledAt: enrolledAt ? new Date(enrolledAt) : undefined,
               status: 'active',

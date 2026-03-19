@@ -19,7 +19,21 @@ const courseSchema = new mongoose.Schema(
     description: {
       type: String,
     },
+    productType: {
+      type: String,
+      trim: true,
+    },
+    tags: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
     thumbnail: {
+      type: String,
+    },
+    // Primary product image URL (kept for clarity alongside thumbnail)
+    image: {
       type: String,
     },
     /** Shopify product handle for storefront URL (e.g. /products/{handle}) */

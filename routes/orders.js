@@ -135,7 +135,10 @@ router.get('/', authenticate, async (req, res, next) => {
     });
 
     const enrollments = await Enrollment.find({ userId: req.user.userId })
-      .populate('courseId', 'title thumbnail handle scormUrl admissionId totalLessons')
+      .populate(
+        'courseId',
+        'title thumbnail image handle scormUrl admissionId totalLessons shopifyProductId productType description tags'
+      )
       .populate('userId', 'name email')
       .sort({ enrolledAt: -1 });
 
@@ -165,7 +168,10 @@ router.get('/', authenticate, async (req, res, next) => {
     const finalEnrollments = enrollments.length
       ? enrollments
       : await Enrollment.find({ userId: req.user.userId })
-          .populate('courseId', 'title thumbnail handle scormUrl admissionId totalLessons')
+          .populate(
+            'courseId',
+            'title thumbnail image handle scormUrl admissionId totalLessons shopifyProductId productType description tags'
+          )
           .populate('userId', 'name email')
           .sort({ enrolledAt: -1 });
 
