@@ -110,7 +110,7 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
       query: queryById,
       variables: idVariables,
     });
-    const customer = respJson?.data?.data?.customer;
+    const customer = respJson?.data?.customer;
     console.log("user result", customer);
     if (customer) {
       return {

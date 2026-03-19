@@ -115,15 +115,22 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
       }
       matchedCourses += 1;
 
-      // Check if enrollment already exists
+      // Keep one enrollment per user+product (avoid duplicates across multiple orders
+      // for the same course). Order history still stays in ShopifyOrder cache.
       const existingEnrollment = await Enrollment.findOne({
         userId: user._id,
-        shopifyOrderId: String(order.id),
         shopifyProductId: String(lineItem.product_id),
-      });
+      }).sort({ enrolledAt: -1 });
 
       if (existingEnrollment) {
-        console.log(`ℹ️ Enrollment already exists for order ${order.order_number}`);
+        console.log(
+          `ℹ️ Enrollment already exists for product ${lineItem.product_id}; reusing existing enrollment`
+        );
+        existingEnrollment.shopifyOrderNumber =
+          order.order_number != null ? String(order.order_number) : existingEnrollment.shopifyOrderNumber;
+        existingEnrollment.orderData = order;
+        if (existingEnrollment.status !== 'cancelled') existingEnrollment.status = 'active';
+        await existingEnrollment.save();
         continue;
       }
 

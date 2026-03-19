@@ -83,6 +83,7 @@ const CUSTOMER_ORDERS_QUERY = `
                     id
                     product {
                       id
+                      title
                     }
                   }
                 }
@@ -146,7 +147,7 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
       break;
     }
 
-    const ordersConn = respJson?.data?.data?.customer?.orders;
+    const ordersConn = respJson?.data?.customer?.orders;
     const edges = ordersConn?.edges ?? [];
     const pageInfo = ordersConn?.pageInfo ?? { hasNextPage: false, endCursor: null };
 
@@ -167,8 +168,20 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
         {
           $set: {
             shopifyOrderNumber: shopifyOrderNumber || undefined,
+            shopifyCustomerId: String(shopifyCustomerId),
             orderCreatedAt: order.createdAt ? new Date(order.createdAt) : undefined,
             rawOrderData: order,
+            lineItems: (order?.lineItems?.edges ?? []).map((edge) => {
+              const li = edge?.node;
+              const productId = parseNumericFromGid(li?.variant?.product?.id);
+              const variantId = parseNumericFromGid(li?.variant?.id);
+              return {
+                title: li?.title ?? undefined,
+                quantity: li?.quantity ?? undefined,
+                shopifyProductId: productId ?? undefined,
+                shopifyVariantId: variantId ?? undefined,
+              };
+            }),
           },
         },
         { upsert: true, new: true }
@@ -182,28 +195,56 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
         const shopifyProductId = parseNumericFromGid(productGid);
         if (!shopifyProductId) continue;
 
-        const course = await Course.findOne({ shopifyProductId: String(shopifyProductId), isActive: true }).select(
+        let course = await Course.findOne({ shopifyProductId: String(shopifyProductId), isActive: true }).select(
           '_id title scormUrl admissionId totalLessons thumbnail handle shopifyProductId'
         );
-        if (!course) continue;
+        if (!course) {
+          // Auto-backfill minimal course when product exists in orders but not in LMS cache.
+          const fallbackTitle =
+            line?.variant?.product?.title ??
+            line?.title ??
+            `Course ${String(shopifyProductId)}`;
+          course = await Course.create({
+            shopifyProductId: String(shopifyProductId),
+            title: fallbackTitle,
+            description: '',
+            thumbnail: undefined,
+            shopifyData: {
+              source: 'order-sync-backfill',
+              productId: String(shopifyProductId),
+              orderId: String(shopifyOrderId),
+            },
+          });
+          console.log('[shopify sync] backfilled missing course', {
+            userId,
+            shopifyCustomerId,
+            shopifyOrderId: String(shopifyOrderId),
+            shopifyProductId: String(shopifyProductId),
+            courseId: course._id.toString(),
+            title: fallbackTitle,
+          });
+        }
 
         matchedCourses += 1;
 
         const existingEnrollment = await Enrollment.findOne({
           userId,
-          shopifyOrderId: String(shopifyOrderId),
           shopifyProductId: String(shopifyProductId),
-        });
+        }).sort({ enrolledAt: -1 });
 
         const enrollment = existingEnrollment
           ? await Enrollment.findByIdAndUpdate(
               existingEnrollment._id,
               {
+                // Keep the original enrollment ownership for course access,
+                // but refresh latest order snapshot metadata.
                 $set: {
-                  enrolledAt: enrolledAt ? new Date(enrolledAt) : existingEnrollment.enrolledAt,
                   shopifyOrderNumber: shopifyOrderNumber || existingEnrollment.shopifyOrderNumber,
                   orderData: order,
-                  status: existingEnrollment.status || 'active',
+                  status:
+                    existingEnrollment.status === 'cancelled'
+                      ? existingEnrollment.status
+                      : 'active',
                 },
               },
               { new: true }
@@ -219,7 +260,24 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
               status: 'active',
             });
 
-        if (enrollment && !existingEnrollment) enrollmentsCreated += 1;
+        if (enrollment && !existingEnrollment) {
+          enrollmentsCreated += 1;
+          console.log('[shopify sync] enrollment created', {
+            userId,
+            shopifyCustomerId,
+            shopifyOrderId: String(shopifyOrderId),
+            shopifyProductId: String(shopifyProductId),
+            enrollmentId: enrollment._id?.toString?.() ?? null,
+          });
+        } else if (enrollment && existingEnrollment) {
+          console.log('[shopify sync] enrollment reused for same product', {
+            userId,
+            shopifyCustomerId,
+            shopifyOrderId: String(shopifyOrderId),
+            shopifyProductId: String(shopifyProductId),
+            enrollmentId: enrollment._id?.toString?.() ?? null,
+          });
+        }
         // If enrollment existed, enrollmentsCreated is intentionally not incremented.
 
         const existingProgress = await Progress.findOne({ enrollmentId: enrollment?._id });
