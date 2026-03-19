@@ -29,7 +29,10 @@ function verifyLinkSignature(customerId, email, signature) {
 }
 
 function getShopifyAdminConfig() {
-  const shopifyShopDomain = process.env.SHOPIFY_SHOP_DOMAIN; // e.g. marketplace.vectra-intl.com
+  const rawShopDomain = process.env.SHOPIFY_SHOP_DOMAIN ?? process.env.SHOPIFY_SHOP; // e.g. marketplace.vectra-intl.com
+  const shopifyShopDomain = typeof rawShopDomain === 'string'
+    ? rawShopDomain.replace(/^https?:\/\//i, '').split('/')[0]
+    : undefined;
   // Support both variable names (some setups use SHOPIFY_ADMIN_API_TOKEN).
   const shopifyAdminAccessToken =
     process.env.SHOPIFY_ADMIN_ACCESS_TOKEN ?? process.env.SHOPIFY_ADMIN_API_TOKEN;

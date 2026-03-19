@@ -6,11 +6,22 @@ import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
+function normalizeShopDomain(input) {
+  const raw = String(input ?? '').trim();
+  if (!raw) return null;
+  // Accept values like:
+  // - "vectra-shop.myshopify.com"
+  // - "https://vectra-shop.myshopify.com/"
+  // - "https://vectra-shop.myshopify.com/admin"
+  return raw.replace(/^https?:\/\//i, '').split('/')[0] || null;
+}
+
 function getShopifyAdminConfig() {
   // Support multiple env var names used across setups.
   // Prefer SHOPIFY_SHOP_DOMAIN, fallback to SHOPIFY_SHOP (common myshopify.com domain).
-  const shopifyShopDomain =
-    process.env.SHOPIFY_SHOP_DOMAIN ?? process.env.SHOPIFY_SHOP; // e.g. marketplace.vectra-intl.com or xxxx.myshopify.com
+  const shopifyShopDomain = normalizeShopDomain(
+    process.env.SHOPIFY_SHOP_DOMAIN ?? process.env.SHOPIFY_SHOP
+  ); // e.g. marketplace.vectra-intl.com or xxxx.myshopify.com
   const shopifyAdminAccessToken =
     process.env.SHOPIFY_ADMIN_ACCESS_TOKEN ?? process.env.SHOPIFY_ADMIN_API_TOKEN;
   const shopifyAdminApiVersion = process.env.SHOPIFY_ADMIN_API_VERSION || '2025-01';
