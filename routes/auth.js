@@ -68,11 +68,13 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
 
   const idVariables = { id: `gid://shopify/Customer/${normalizedId}` };
   try {
-    const resp = await axios.post(
-      endpoint,
-      { query: queryById, variables: idVariables },
-      { headers, timeout: 10000 }
-    );
+    const resp = await axios.request({
+      method: 'POST',
+      url: endpoint,
+      data: { query: queryById, variables: idVariables },
+      headers,
+      timeout: 10000,
+    });
     const customer = resp?.data?.data?.customer;
     if (customer) {
       return {
@@ -110,11 +112,13 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
 
     const variables = { query: `email:${normalizedEmail}` };
     try {
-      const resp = await axios.post(
-        endpoint,
-        { query: queryByEmail, variables },
-        { headers, timeout: 10000 }
-      );
+      const resp = await axios.request({
+        method: 'POST',
+        url: endpoint,
+        data: { query: queryByEmail, variables },
+        headers,
+        timeout: 10000,
+      });
       const node = resp?.data?.data?.customers?.edges?.[0]?.node;
       if (node) {
         return {

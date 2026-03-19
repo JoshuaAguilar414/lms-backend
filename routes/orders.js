@@ -113,14 +113,16 @@ router.get('/', authenticate, async (req, res, next) => {
       'X-Shopify-Access-Token': shopifyAdminAccessToken,
     };
 
-    const resp = await axios.post(
-      endpoint,
-      {
+    const resp = await axios.request({
+      method: 'POST',
+      url: endpoint,
+      data: {
         query: CUSTOMER_ORDERS_QUERY,
         variables: { id: shopifyCustomerGid },
       },
-      { headers, timeout: 20000 }
-    );
+      headers,
+      timeout: 20000,
+    });
 
     const edges = resp?.data?.data?.customer?.orders?.edges ?? [];
 
