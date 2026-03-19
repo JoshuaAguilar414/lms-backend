@@ -111,6 +111,7 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
       variables: idVariables,
     });
     const customer = respJson?.data?.data?.customer;
+    console.log("user result", customer);
     if (customer) {
       return {
         firstName: customer.firstName ?? null,

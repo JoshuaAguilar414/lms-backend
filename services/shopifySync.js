@@ -143,6 +143,7 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
       query: CUSTOMER_ORDERS_QUERY,
       variables: { id: shopifyCustomerGid, cursor },
     });
+    console.log("respJson", respJson);
 
     const ordersConn = respJson?.data?.data?.customer?.orders;
     const edges = ordersConn?.edges ?? [];
