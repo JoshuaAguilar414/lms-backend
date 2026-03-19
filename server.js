@@ -11,6 +11,7 @@ import authRoutes from './routes/auth.js';
 import courseRoutes from './routes/courses.js';
 import enrollmentRoutes from './routes/enrollments.js';
 import progressRoutes from './routes/progress.js';
+import ordersRoutes from './routes/orders.js';
 import webhookRoutes from './routes/webhooks.js';
 
 // Load environment variables
@@ -65,6 +66,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/courses', courseRoutes);
 app.use('/api/enrollments', enrollmentRoutes);
+app.use('/api/orders', ordersRoutes);
 app.use('/api/progress', progressRoutes);
 app.use('/api/webhooks', webhookRoutes);
 
