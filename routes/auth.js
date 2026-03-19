@@ -2,7 +2,9 @@ import crypto from 'crypto';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import Enrollment from '../models/Enrollment.js';
 import { authenticate } from '../middleware/auth.js';
+import { syncOrdersForShopifyCustomer } from '../services/shopifySync.js';
 
 const router = express.Router();
 
@@ -576,6 +578,18 @@ router.get('/me', authenticate, async (req, res, next) => {
     const user = await User.findById(req.user.userId).lean();
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Optional "sync-on-read" to ensure enrollments exist for SCORM dashboards.
+    if (req.user?.shopifyCustomerId) {
+      const enrollmentsCount = await Enrollment.countDocuments({ userId: req.user.userId });
+      if (enrollmentsCount === 0) {
+        console.log('[auth me] mongo empty -> syncing enrollments from Shopify');
+        await syncOrdersForShopifyCustomer({
+          userId: req.user.userId,
+          shopifyCustomerId: req.user.shopifyCustomerId,
+        });
+      }
     }
 
     // We prefer values stored from webhook headers (per store/customer).

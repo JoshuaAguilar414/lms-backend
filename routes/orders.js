@@ -4,6 +4,7 @@ import User from '../models/User.js';
 import Enrollment from '../models/Enrollment.js';
 import Progress from '../models/Progress.js';
 import { authenticate } from '../middleware/auth.js';
+import { syncOrdersForShopifyCustomer } from '../services/shopifySync.js';
 
 const router = express.Router();
 
@@ -138,6 +139,14 @@ router.get('/', authenticate, async (req, res, next) => {
       .populate('userId', 'name email')
       .sort({ enrolledAt: -1 });
 
+    if (enrollments.length === 0 && req.user?.shopifyCustomerId) {
+      console.log('[orders] mongo empty -> syncing from Shopify');
+      await syncOrdersForShopifyCustomer({
+        userId: req.user.userId,
+        shopifyCustomerId: req.user.shopifyCustomerId,
+      });
+    }
+
     const enrollmentIds = enrollments.map((e) => e._id);
     const progressDocs = enrollmentIds.length
       ? await Progress.find({ enrollmentId: { $in: enrollmentIds } })
@@ -152,10 +161,30 @@ router.get('/', authenticate, async (req, res, next) => {
       progressDocs: progressDocs.length,
     });
 
+    // If we synced above, re-fetch enrollments so the response includes new records.
+    const finalEnrollments = enrollments.length
+      ? enrollments
+      : await Enrollment.find({ userId: req.user.userId })
+          .populate('courseId', 'title thumbnail handle scormUrl admissionId totalLessons')
+          .populate('userId', 'name email')
+          .sort({ enrolledAt: -1 });
+
+    const finalEnrollmentIds = finalEnrollments.map((e) => e._id);
+    const finalProgressDocs = finalEnrollmentIds.length
+      ? await Progress.find({ enrollmentId: { $in: finalEnrollmentIds } })
+      : [];
+
+    const finalProgressByEnrollmentId = new Map(
+      finalProgressDocs.map((p) => [
+        String(p.enrollmentId),
+        { progress: p.progress, completed: p.completed },
+      ])
+    );
+
     res.json(
-      enrollments.map((enrollment) => ({
+      finalEnrollments.map((enrollment) => ({
         ...enrollment.toObject(),
-        progress: progressByEnrollmentId.get(String(enrollment._id)) ?? null,
+        progress: finalProgressByEnrollmentId.get(String(enrollment._id)) ?? null,
       }))
     );
   } catch (error) {
