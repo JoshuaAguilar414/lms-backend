@@ -30,16 +30,65 @@ function verifyLinkSignature(customerId, email, signature) {
 /**
  * Find or create user by Shopify customer ID and email; issue LMS JWT.
  */
-async function findOrCreateUserAndIssueLmsToken(customerId, email) {
+async function findOrCreateUserAndIssueLmsToken(customerId, email, customerMeta = {}) {
   const normalizedId = String(customerId).replace(/^gid:\/\/shopify\/Customer\//i, '');
   const normalizedEmail = String(email).trim().toLowerCase();
+
+  // `shopify-customer-login` is a lightweight Liquid login flow (customerId + email).
+  // If the link also includes first/last/name, we persist it so `/api/auth/me` shows real names.
+  const firstName =
+    typeof customerMeta.firstName === 'string'
+      ? customerMeta.firstName.trim()
+      : typeof customerMeta.givenName === 'string'
+        ? customerMeta.givenName.trim()
+        : undefined;
+  const lastName =
+    typeof customerMeta.lastName === 'string'
+      ? customerMeta.lastName.trim()
+      : typeof customerMeta.familyName === 'string'
+        ? customerMeta.familyName.trim()
+        : undefined;
+  const name =
+    typeof customerMeta.name === 'string'
+      ? customerMeta.name.trim()
+      : [firstName, lastName].filter(Boolean).join(' ').trim() || undefined;
+
   let user = await User.findOne({ shopifyCustomerId: normalizedId });
   if (!user) {
     user = await User.create({
       shopifyCustomerId: normalizedId,
       email: normalizedEmail || `customer-${normalizedId}@shopify.local`,
-      name: `Customer ${normalizedId}`,
+      firstName,
+      lastName,
+      name: name || `Customer ${normalizedId}`,
+      // Legacy login (customerId + email) doesn't include the full Shopify customer JSON,
+      // but we still persist a minimal snapshot so `/api/auth/me` can expose it.
+      shopifyData: {
+        id: normalizedId,
+        email: normalizedEmail || undefined,
+        ...(firstName ? { first_name: firstName } : {}),
+        ...(lastName ? { last_name: lastName } : {}),
+        ...(name ? { name } : {}),
+      },
     });
+  } else {
+    // If we receive "real" names from the link and the record doesn't have them yet,
+    // update for this user.
+    const shouldUpdateName = name && (!user.name || user.name === `Customer ${normalizedId}`);
+    const shouldUpdateFirstLast = Boolean(firstName && (!user.firstName || !user.lastName));
+    if (shouldUpdateName || shouldUpdateFirstLast) {
+      user.name = shouldUpdateName ? name : user.name;
+      if (firstName && (!user.firstName || shouldUpdateFirstLast)) user.firstName = firstName;
+      if (lastName && (!user.lastName || shouldUpdateFirstLast)) user.lastName = lastName;
+      // Keep shopifyData snapshot somewhat fresh for `/api/auth/me`
+      user.shopifyData = {
+        ...(user.shopifyData || {}),
+        ...(firstName ? { first_name: firstName } : {}),
+        ...(lastName ? { last_name: lastName } : {}),
+        ...(name ? { name } : {}),
+      };
+      await user.save();
+    }
   }
   const jwtSecret = process.env.JWT_SECRET;
   if (!jwtSecret) throw new Error('JWT secret not configured');
@@ -292,6 +341,16 @@ router.get('/shopify-customer-login', async (req, res, next) => {
     const email = req.query.email;
     const signature = req.query.signature;
 
+    const getString = (v) => {
+      if (typeof v === 'string') return v;
+      if (Array.isArray(v)) return v[0];
+      return undefined;
+    };
+
+    const firstName = getString(req.query.firstName);
+    const lastName = getString(req.query.lastName);
+    const name = getString(req.query.name);
+
     if (!customerId || !email) {
       return res.status(400).json({
         error: 'Missing customerId or email',
@@ -306,7 +365,11 @@ router.get('/shopify-customer-login', async (req, res, next) => {
       });
     }
 
-    const { lmsToken } = await findOrCreateUserAndIssueLmsToken(customerId, email);
+    const { lmsToken } = await findOrCreateUserAndIssueLmsToken(customerId, email, {
+      firstName,
+      lastName,
+      name,
+    });
     redirectToFrontendWithToken(res, lmsToken);
   } catch (error) {
     next(error);
@@ -354,6 +417,8 @@ router.get('/me', authenticate, async (req, res, next) => {
       shopifyCustomerId: user.shopifyCustomerId,
       shopifyShopDomain,
       shopifyShopId: shopifyShopId ? String(shopifyShopId) : null,
+      // Expose Shopify customer snapshot when available (may be missing for legacy users).
+      shopifyData: user.shopifyData ?? null,
     });
   } catch (error) {
     next(error);
