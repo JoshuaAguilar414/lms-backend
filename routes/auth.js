@@ -323,6 +323,32 @@ function getConfiguredShopifyShopId() {
   return str.match(/(\d+)/)?.[1] ?? null;
 }
 
+function extractUserCurrency(user, latestEnrollment) {
+  const shopifyData = user?.shopifyData || {};
+  const currencyFromShopifyData =
+    shopifyData?.currency ||
+    shopifyData?.currencyCode ||
+    shopifyData?.default_currency ||
+    shopifyData?.defaultCurrency ||
+    null;
+  if (typeof currencyFromShopifyData === 'string' && currencyFromShopifyData.trim()) {
+    return currencyFromShopifyData.trim().toUpperCase();
+  }
+
+  const lineItem = latestEnrollment?.orderData?.lineItems?.edges?.[0]?.node;
+  const currencyFromLatestOrder =
+    lineItem?.discountedTotalSet?.shopMoney?.currencyCode ||
+    lineItem?.originalTotalSet?.shopMoney?.currencyCode ||
+    lineItem?.originalUnitPriceSet?.shopMoney?.currencyCode ||
+    latestEnrollment?.orderData?.currentTotalPriceSet?.shopMoney?.currencyCode ||
+    null;
+  if (typeof currencyFromLatestOrder === 'string' && currencyFromLatestOrder.trim()) {
+    return currencyFromLatestOrder.trim().toUpperCase();
+  }
+
+  return 'USD';
+}
+
 /**
  * GET /api/auth/shopify-redirect
  * My Courses redirect from Shopify: verify Shopify session token, then redirect to LMS frontend.
@@ -634,6 +660,11 @@ router.get('/me', authenticate, async (req, res, next) => {
       shopifyShopId = getConfiguredShopifyShopId();
     }
 
+    const latestEnrollment = await Enrollment.findOne({ userId: req.user.userId })
+      .sort({ enrolledAt: -1 })
+      .select('orderData');
+    const currency = extractUserCurrency(user, latestEnrollment);
+
     res.json({
       id: user._id,
       email: user.email,
@@ -644,6 +675,7 @@ router.get('/me', authenticate, async (req, res, next) => {
       shopifyCustomerId: user.shopifyCustomerId,
       shopifyShopDomain,
       shopifyShopId: shopifyShopId ? String(shopifyShopId) : null,
+      currency,
       // Expose Shopify customer snapshot when available (may be missing for legacy users).
       shopifyData: user.shopifyData ?? null,
     });
