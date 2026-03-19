@@ -46,6 +46,11 @@ const enrollmentSchema = new mongoose.Schema(
     shopifyProductImage: {
       type: String,
     },
+    quantity: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
     // Enrollment status
     status: {
       type: String,

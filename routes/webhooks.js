@@ -9,6 +9,20 @@ import { syncOrdersForShopifyCustomer } from '../services/shopifySync.js';
 
 const router = express.Router();
 
+async function computeProductQuantityFromCachedOrders(shopifyCustomerId, shopifyProductId) {
+  const orders = await ShopifyOrder.find({ shopifyCustomerId: String(shopifyCustomerId) })
+    .select('lineItems')
+    .lean();
+  let total = 0;
+  for (const order of orders) {
+    for (const item of order?.lineItems || []) {
+      if (String(item?.shopifyProductId ?? '') !== String(shopifyProductId)) continue;
+      total += Math.max(1, Number(item?.quantity) || 1);
+    }
+  }
+  return Math.max(1, total);
+}
+
 /** Sync customer payload to User (from order.customer or customer webhook). */
 async function syncCustomerToUser(customer, shopifyShopDomain, shopifyShopId) {
   const id = String(customer.id);
@@ -126,9 +140,14 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
         console.log(
           `ℹ️ Enrollment already exists for product ${lineItem.product_id}; reusing existing enrollment`
         );
+        const aggregatedQuantity = await computeProductQuantityFromCachedOrders(
+          shopifyCustomerId,
+          String(lineItem.product_id)
+        );
         existingEnrollment.shopifyOrderNumber =
           order.order_number != null ? String(order.order_number) : existingEnrollment.shopifyOrderNumber;
         existingEnrollment.orderData = order;
+        existingEnrollment.quantity = aggregatedQuantity;
         if (existingEnrollment.status !== 'cancelled') existingEnrollment.status = 'active';
         await existingEnrollment.save();
         continue;
@@ -146,6 +165,10 @@ router.post('/shopify/order-created', verifyShopifyWebhook, async (req, res, nex
         shopifyProductTags: Array.isArray(course.tags) ? course.tags : [],
         shopifyProductImage: course.image || course.thumbnail,
         orderData: order,
+        quantity: await computeProductQuantityFromCachedOrders(
+          shopifyCustomerId,
+          String(lineItem.product_id)
+        ),
         // Make enrolledAt align with Shopify order time (important for order history UI).
         enrolledAt: orderCreatedAt ?? undefined,
         status: 'active',

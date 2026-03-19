@@ -80,6 +80,7 @@ router.post('/', authenticate, async (req, res, next) => {
       shopifyOrderNumber,
       shopifyProductId,
       orderData,
+      quantity,
       expiresAt,
     } = req.body;
 
@@ -98,11 +99,17 @@ router.post('/', authenticate, async (req, res, next) => {
     // Check if enrollment already exists
     const existingEnrollment = await Enrollment.findOne({
       userId,
-      shopifyOrderId,
       shopifyProductId,
     });
 
     if (existingEnrollment) {
+      const requestedQuantity = Math.max(1, Number(quantity) || 1);
+      existingEnrollment.quantity = Math.max(1, Number(existingEnrollment.quantity || 1) + requestedQuantity);
+      if (shopifyOrderId) existingEnrollment.shopifyOrderId = shopifyOrderId;
+      if (shopifyOrderNumber) existingEnrollment.shopifyOrderNumber = shopifyOrderNumber;
+      if (orderData) existingEnrollment.orderData = orderData;
+      if (existingEnrollment.status !== 'cancelled') existingEnrollment.status = 'active';
+      await existingEnrollment.save();
       return res.json(existingEnrollment);
     }
 
@@ -114,6 +121,7 @@ router.post('/', authenticate, async (req, res, next) => {
       shopifyOrderNumber,
       shopifyProductId,
       orderData,
+      quantity: Math.max(1, Number(quantity) || 1),
       expiresAt: expiresAt ? new Date(expiresAt) : null,
       status: 'active',
     });

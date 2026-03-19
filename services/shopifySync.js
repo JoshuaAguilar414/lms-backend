@@ -143,6 +143,7 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
   let enrollmentsCreated = 0;
   let progressCreated = 0;
   let ordersCached = 0;
+  const productAggregates = new Map();
 
   while (hasNextPage) {
     const respJson = await shopifyPostGraphql(endpoint, headers, {
@@ -201,6 +202,7 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
         const productGid = line?.variant?.product?.id;
         const shopifyProductId = parseNumericFromGid(productGid);
         if (!shopifyProductId) continue;
+        const lineQuantity = Math.max(1, Number(line?.quantity) || 1);
 
         let course = await Course.findOne({ shopifyProductId: String(shopifyProductId), isActive: true }).select(
           '_id title scormUrl admissionId totalLessons thumbnail image handle shopifyProductId description productType tags'
@@ -237,79 +239,95 @@ export async function syncOrdersForShopifyCustomer({ userId, shopifyCustomerId }
 
         matchedCourses += 1;
 
-        const existingEnrollment = await Enrollment.findOne({
-          userId,
-          shopifyProductId: String(shopifyProductId),
-        }).sort({ enrolledAt: -1 });
-
-        const enrollment = existingEnrollment
-          ? await Enrollment.findByIdAndUpdate(
-              existingEnrollment._id,
-              {
-                // Keep the original enrollment ownership for course access,
-                // but refresh latest order snapshot metadata.
-                $set: {
-                  shopifyOrderNumber: shopifyOrderNumber || existingEnrollment.shopifyOrderNumber,
-                  orderData: order,
-                  status:
-                    existingEnrollment.status === 'cancelled'
-                      ? existingEnrollment.status
-                      : 'active',
-                },
-              },
-              { new: true }
-            )
-          : await Enrollment.create({
-              userId,
-              courseId: course._id,
-              shopifyOrderId: String(shopifyOrderId),
-              shopifyOrderNumber: shopifyOrderNumber || undefined,
-              shopifyProductId: String(shopifyProductId),
-              shopifyProductType: course.productType,
-              shopifyProductDescription: course.description,
-              shopifyProductTags: Array.isArray(course.tags) ? course.tags : [],
-              shopifyProductImage: course.image || course.thumbnail,
-              orderData: order,
-              enrolledAt: enrolledAt ? new Date(enrolledAt) : undefined,
-              status: 'active',
-            });
-
-        if (enrollment && !existingEnrollment) {
-          enrollmentsCreated += 1;
-          console.log('[shopify sync] enrollment created', {
-            userId,
-            shopifyCustomerId,
-            shopifyOrderId: String(shopifyOrderId),
-            shopifyProductId: String(shopifyProductId),
-            enrollmentId: enrollment._id?.toString?.() ?? null,
+        const key = String(shopifyProductId);
+        const prev = productAggregates.get(key);
+        if (!prev) {
+          productAggregates.set(key, {
+            shopifyProductId: key,
+            quantity: lineQuantity,
+            latestOrderId: String(shopifyOrderId),
+            latestOrderNumber: shopifyOrderNumber || undefined,
+            latestOrderData: order,
+            latestEnrolledAt: enrolledAt ? new Date(enrolledAt) : undefined,
+            course,
           });
-        } else if (enrollment && existingEnrollment) {
-          console.log('[shopify sync] enrollment reused for same product', {
-            userId,
-            shopifyCustomerId,
-            shopifyOrderId: String(shopifyOrderId),
-            shopifyProductId: String(shopifyProductId),
-            enrollmentId: enrollment._id?.toString?.() ?? null,
-          });
-        }
-        // If enrollment existed, enrollmentsCreated is intentionally not incremented.
-
-        const existingProgress = await Progress.findOne({ enrollmentId: enrollment?._id });
-        if (!existingProgress && enrollment?._id) {
-          await Progress.create({
-            enrollmentId: enrollment._id,
-            courseId: course._id,
-            userId,
-            progress: 0,
-            completed: false,
-          });
-          progressCreated += 1;
+        } else {
+          prev.quantity += lineQuantity;
+          const prevTs = prev.latestEnrolledAt ? prev.latestEnrolledAt.getTime() : 0;
+          const nextTs = enrolledAt ? new Date(enrolledAt).getTime() : 0;
+          if (nextTs >= prevTs) {
+            prev.latestOrderId = String(shopifyOrderId);
+            prev.latestOrderNumber = shopifyOrderNumber || prev.latestOrderNumber;
+            prev.latestOrderData = order;
+            prev.latestEnrolledAt = enrolledAt ? new Date(enrolledAt) : prev.latestEnrolledAt;
+          }
+          prev.course = course;
         }
       }
     }
 
     hasNextPage = Boolean(pageInfo?.hasNextPage);
     cursor = pageInfo?.endCursor ?? null;
+  }
+
+  for (const aggregate of productAggregates.values()) {
+    const existingEnrollment = await Enrollment.findOne({
+      userId,
+      shopifyProductId: aggregate.shopifyProductId,
+    }).sort({ enrolledAt: -1 });
+
+    const enrollment = existingEnrollment
+      ? await Enrollment.findByIdAndUpdate(
+          existingEnrollment._id,
+          {
+            // Keep one enrollment per user+product and set aggregated quantity
+            // from Shopify orders (idempotent across repeated syncs).
+            $set: {
+              courseId: aggregate.course._id,
+              shopifyOrderId: aggregate.latestOrderId,
+              shopifyOrderNumber: aggregate.latestOrderNumber || existingEnrollment.shopifyOrderNumber,
+              shopifyProductType: aggregate.course.productType,
+              shopifyProductDescription: aggregate.course.description,
+              shopifyProductTags: Array.isArray(aggregate.course.tags) ? aggregate.course.tags : [],
+              shopifyProductImage: aggregate.course.image || aggregate.course.thumbnail,
+              orderData: aggregate.latestOrderData,
+              quantity: Math.max(1, aggregate.quantity),
+              status: existingEnrollment.status === 'cancelled' ? existingEnrollment.status : 'active',
+            },
+          },
+          { new: true }
+        )
+      : await Enrollment.create({
+          userId,
+          courseId: aggregate.course._id,
+          shopifyOrderId: aggregate.latestOrderId,
+          shopifyOrderNumber: aggregate.latestOrderNumber || undefined,
+          shopifyProductId: aggregate.shopifyProductId,
+          shopifyProductType: aggregate.course.productType,
+          shopifyProductDescription: aggregate.course.description,
+          shopifyProductTags: Array.isArray(aggregate.course.tags) ? aggregate.course.tags : [],
+          shopifyProductImage: aggregate.course.image || aggregate.course.thumbnail,
+          orderData: aggregate.latestOrderData,
+          quantity: Math.max(1, aggregate.quantity),
+          enrolledAt: aggregate.latestEnrolledAt,
+          status: 'active',
+        });
+
+    if (enrollment && !existingEnrollment) {
+      enrollmentsCreated += 1;
+    }
+
+    const existingProgress = await Progress.findOne({ enrollmentId: enrollment?._id });
+    if (!existingProgress && enrollment?._id) {
+      await Progress.create({
+        enrollmentId: enrollment._id,
+        courseId: aggregate.course._id,
+        userId,
+        progress: 0,
+        completed: false,
+      });
+      progressCreated += 1;
+    }
   }
 
   console.log('[shopify sync] summary', {
