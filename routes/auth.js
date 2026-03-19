@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import express from 'express';
-import axios from 'axios';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import { authenticate } from '../middleware/auth.js';
@@ -11,6 +10,36 @@ const router = express.Router();
 function getLinkSecret() {
   const s = process.env.SHOPIFY_LINK_SECRET;
   return typeof s === 'string' && s.trim() !== '' ? s : null;
+}
+
+async function shopifyPostGraphql(endpoint, headers, payload) {
+  const body = JSON.stringify(payload);
+  let response = await fetch(endpoint, {
+    method: 'POST',
+    headers,
+    body,
+    redirect: 'manual', // avoid method switching on redirects (can become GET)
+  });
+
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get('location');
+    if (location) {
+      const redirectUrl = new URL(location, endpoint).toString();
+      response = await fetch(redirectUrl, {
+        method: 'POST',
+        headers,
+        body,
+        redirect: 'manual',
+      });
+    }
+  }
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(`Shopify Admin API error ${response.status}: ${responseText}`);
+  }
+
+  return responseText ? JSON.parse(responseText) : {};
 }
 
 /**
@@ -68,14 +97,11 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
 
   const idVariables = { id: `gid://shopify/Customer/${normalizedId}` };
   try {
-    const resp = await axios.request({
-      method: 'POST',
-      url: endpoint,
-      data: { query: queryById, variables: idVariables },
-      headers,
-      timeout: 10000,
+    const respJson = await shopifyPostGraphql(endpoint, headers, {
+      query: queryById,
+      variables: idVariables,
     });
-    const customer = resp?.data?.data?.customer;
+    const customer = respJson?.data?.data?.customer;
     if (customer) {
       return {
         firstName: customer.firstName ?? null,
@@ -112,14 +138,11 @@ async function fetchShopifyCustomerProfileFromAdminApi(customerId, email) {
 
     const variables = { query: `email:${normalizedEmail}` };
     try {
-      const resp = await axios.request({
-        method: 'POST',
-        url: endpoint,
-        data: { query: queryByEmail, variables },
-        headers,
-        timeout: 10000,
+      const respJson = await shopifyPostGraphql(endpoint, headers, {
+        query: queryByEmail,
+        variables,
       });
-      const node = resp?.data?.data?.customers?.edges?.[0]?.node;
+      const node = respJson?.data?.data?.customers?.edges?.[0]?.node;
       if (node) {
         return {
           firstName: node.firstName ?? null,

@@ -1,5 +1,4 @@
 import express from 'express';
-import axios from 'axios';
 import Course from '../models/Course.js';
 import User from '../models/User.js';
 import { authenticate } from '../middleware/auth.js';
@@ -14,6 +13,36 @@ function normalizeShopDomain(input) {
   // - "https://vectra-shop.myshopify.com/"
   // - "https://vectra-shop.myshopify.com/admin"
   return raw.replace(/^https?:\/\//i, '').split('/')[0] || null;
+}
+
+async function shopifyPostGraphql(endpoint, headers, payload) {
+  const body = JSON.stringify(payload);
+  let response = await fetch(endpoint, {
+    method: 'POST',
+    headers,
+    body,
+    redirect: 'manual', // keep method; Shopify may respond with 301 to the myshopify host
+  });
+
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get('location');
+    if (location) {
+      const redirectUrl = new URL(location, endpoint).toString();
+      response = await fetch(redirectUrl, {
+        method: 'POST',
+        headers,
+        body,
+        redirect: 'manual',
+      });
+    }
+  }
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(`Shopify Admin API error ${response.status}: ${responseText}`);
+  }
+
+  return responseText ? JSON.parse(responseText) : {};
 }
 
 function getShopifyAdminConfig() {
@@ -113,18 +142,11 @@ router.get('/', authenticate, async (req, res, next) => {
       'X-Shopify-Access-Token': shopifyAdminAccessToken,
     };
 
-    const resp = await axios.request({
-      method: 'POST',
-      url: endpoint,
-      data: {
-        query: CUSTOMER_ORDERS_QUERY,
-        variables: { id: shopifyCustomerGid },
-      },
-      headers,
-      timeout: 20000,
+    const respJson = await shopifyPostGraphql(endpoint, headers, {
+      query: CUSTOMER_ORDERS_QUERY,
+      variables: { id: shopifyCustomerGid },
     });
-
-    const edges = resp?.data?.data?.customer?.orders?.edges ?? [];
+    const edges = respJson?.data?.data?.customer?.orders?.edges ?? [];
 
     const candidates = [];
     const productIdsSet = new Set();
