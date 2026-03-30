@@ -3,6 +3,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { connectDB } from './config/database.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
@@ -14,15 +16,23 @@ import progressRoutes from './routes/progress.js';
 import ordersRoutes from './routes/orders.js';
 import debugShopifyRoutes from './routes/debug-shopify.js';
 import webhookRoutes from './routes/webhooks.js';
+import adminRoutes from './routes/admin.js';
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Connect to MongoDB
 connectDB();
+
+// Uploaded SCORM / assets must be iframe-embeddable from the frontend origin
+// (localhost:3000 vs API :3001 are different origins). Helmet's X-Frame-Options:
+// SAMEORIGIN would block that, so serve /uploads before helmet.
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Security middleware
 app.use(helmet());
@@ -71,6 +81,7 @@ app.use('/api/orders', ordersRoutes);
 app.use('/api/progress', progressRoutes);
 app.use('/api/debug/shopify', debugShopifyRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/admin', adminRoutes);
 
 // 404 handler
 app.use((req, res) => {

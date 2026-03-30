@@ -47,14 +47,26 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+function isMongoObjectIdString(value) {
+  return typeof value === 'string' && /^[a-f0-9]{24}$/i.test(value);
+}
+
 /**
  * GET /api/courses/:id
- * Get course by ID
+ * Get course by MongoDB _id OR by Shopify product id (same id you pass in admin SCORM upload).
  */
 router.get('/:id', async (req, res, next) => {
   try {
-    const course = await Course.findById(req.params.id).select('-shopifyData');
-    
+    const id = String(req.params.id || '').trim();
+    let course = null;
+
+    if (isMongoObjectIdString(id)) {
+      course = await Course.findById(id).select('-shopifyData');
+    }
+    if (!course) {
+      course = await Course.findOne({ shopifyProductId: id }).select('-shopifyData');
+    }
+
     if (!course) {
       return res.status(404).json({ error: 'Course not found' });
     }
