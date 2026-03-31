@@ -17,6 +17,7 @@ import ordersRoutes from './routes/orders.js';
 import debugShopifyRoutes from './routes/debug-shopify.js';
 import webhookRoutes from './routes/webhooks.js';
 import adminRoutes from './routes/admin.js';
+import recommendationsRoutes from './routes/recommendations.js';
 
 // Load environment variables
 dotenv.config();
@@ -82,6 +83,7 @@ app.use('/api/progress', progressRoutes);
 app.use('/api/debug/shopify', debugShopifyRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/recommendations', recommendationsRoutes);
 
 // 404 handler
 app.use((req, res) => {
