@@ -62,20 +62,31 @@ router.post('/', authenticate, async (req, res, next) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
+    const normalizedProgress =
+      progressValue === undefined || progressValue === null
+        ? undefined
+        : Math.max(0, Math.min(100, Number(progressValue) || 0));
+    const completionRequested = Boolean(completed) || normalizedProgress === 100;
+
     // Find or create progress
     let progress = await Progress.findOne({ enrollmentId });
 
     if (progress) {
+      const wasCompleted = Boolean(progress.completed);
       // Update existing progress
-      if (progressValue !== undefined) progress.progress = progressValue;
-      if (completed !== undefined) progress.completed = completed;
+      if (normalizedProgress !== undefined) {
+        // Keep the highest progress to avoid regressions from out-of-order SCORM events.
+        progress.progress = Math.max(progress.progress || 0, normalizedProgress);
+      }
+      if (completed !== undefined || normalizedProgress !== undefined) {
+        progress.completed = progress.completed || completionRequested || (progress.progress || 0) >= 100;
+      }
       if (timeSpent !== undefined) progress.timeSpent = (progress.timeSpent || 0) + timeSpent;
       if (scormData) progress.scormData = { ...progress.scormData, ...scormData };
       progress.lastAccessedAt = new Date();
 
       // Update completion date if completed
-      if (completed && !progress.completed) {
-        progress.completed = true;
+      if (progress.completed && !wasCompleted) {
         // Update enrollment status
         enrollment.status = 'completed';
         enrollment.completedAt = new Date();
@@ -89,12 +100,18 @@ router.post('/', authenticate, async (req, res, next) => {
         enrollmentId,
         courseId: enrollment.courseId,
         userId: enrollment.userId,
-        progress: progressValue || 0,
-        completed: completed || false,
+        progress: normalizedProgress || 0,
+        completed: completionRequested,
         timeSpent: timeSpent || 0,
         scormData: scormData || {},
         lastAccessedAt: new Date(),
       });
+
+      if (progress.completed) {
+        enrollment.status = 'completed';
+        enrollment.completedAt = new Date();
+        await enrollment.save();
+      }
     }
 
     res.json(progress);
